@@ -32,6 +32,17 @@ type Transport struct {
 
 	subsMu sync.Mutex
 	subs   []*subscription
+
+	// endpointPrefix is prepended to ConsumerConfig.Endpoint when
+	// declaring/consuming a queue. It exists because integration_type
+	// manifests in yggdrasil-core declare AMQP queues under a
+	// "yggdrasil.adapter.<provider>." namespace, but adapter authors
+	// register handlers by bare capability name ("describe", "execute").
+	// Without the prefix, the consumer queue would not match what
+	// yggdrasil-core publishes to and the adapter would silently sit
+	// on an empty queue while requests piled up on the real one.
+	// Set via SetEndpointPrefix; ListenAMQP wires it from Config.Provider.
+	endpointPrefix string
 }
 
 // New wraps an open AMQP connection. Callers provision the connection
@@ -51,6 +62,14 @@ func (t *Transport) Connection() *amqp091.Connection {
 	return t.conn
 }
 
+// SetEndpointPrefix configures a string prepended to every consumer
+// endpoint name. Used by ListenAMQP to apply the
+// "yggdrasil.adapter.<provider>." namespace expected by
+// yggdrasil-core integration_type manifests.
+func (t *Transport) SetEndpointPrefix(prefix string) {
+	t.endpointPrefix = prefix
+}
+
 // Consume declares the endpoint queue (durable) and starts a
 // consumer that dispatches each delivery to cfg.Handler.
 func (t *Transport) Consume(cfg rpc.ConsumerConfig) (rpc.Subscription, error) {
@@ -67,14 +86,16 @@ func (t *Transport) Consume(cfg rpc.ConsumerConfig) (rpc.Subscription, error) {
 		cfg.Concurrency = 1
 	}
 
+	queueName := t.endpointPrefix + cfg.Endpoint
+
 	ch, err := t.conn.Channel()
 	if err != nil {
 		return nil, fmt.Errorf("amqp consume: open channel: %w", err)
 	}
 
-	if _, err := ch.QueueDeclare(cfg.Endpoint, true, false, false, false, nil); err != nil {
+	if _, err := ch.QueueDeclare(queueName, true, false, false, false, nil); err != nil {
 		_ = ch.Close()
-		return nil, fmt.Errorf("amqp consume: declare queue %q: %w", cfg.Endpoint, err)
+		return nil, fmt.Errorf("amqp consume: declare queue %q: %w", queueName, err)
 	}
 
 	if err := ch.Qos(cfg.Concurrency, 0, false); err != nil {
@@ -82,15 +103,15 @@ func (t *Transport) Consume(cfg rpc.ConsumerConfig) (rpc.Subscription, error) {
 		return nil, fmt.Errorf("amqp consume: set qos: %w", err)
 	}
 
-	deliveries, err := ch.Consume(cfg.Endpoint, "", false, false, false, false, nil)
+	deliveries, err := ch.Consume(queueName, "", false, false, false, false, nil)
 	if err != nil {
 		_ = ch.Close()
-		return nil, fmt.Errorf("amqp consume: start consumer %q: %w", cfg.Endpoint, err)
+		return nil, fmt.Errorf("amqp consume: start consumer %q: %w", queueName, err)
 	}
 
 	sub := &subscription{
 		transport: t,
-		endpoint:  cfg.Endpoint,
+		endpoint:  queueName,
 		ch:        ch,
 		done:      make(chan struct{}),
 	}

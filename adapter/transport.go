@@ -61,6 +61,13 @@ func (a *Adapter) ListenHTTP(addr string) *Adapter {
 // reachable at url. The dial is deferred until Run so adapter
 // construction does not require a live broker (important for unit
 // tests and for binaries that retry on startup).
+//
+// When Config.Provider is set, the AMQP transport prefixes consumer
+// queue names with "yggdrasil.adapter.<provider>." to match the queue
+// names yggdrasil-core publishes to. Without this, an adapter
+// registering "describe" would consume from queue "describe" while
+// core targets "yggdrasil.adapter.<provider>.describe", and requests
+// would silently pile up on the unread queue.
 func (a *Adapter) ListenAMQP(url string) *Adapter {
 	a.beforeRun = func(_ context.Context) error {
 		conn, err := amqp.Dial(url)
@@ -68,6 +75,9 @@ func (a *Adapter) ListenAMQP(url string) *Adapter {
 			return fmt.Errorf("adapter: dial AMQP %q: %w", url, err)
 		}
 		transport := sdkamqp.New(conn)
+		if provider := a.config.Provider; provider != "" {
+			transport.SetEndpointPrefix("yggdrasil.adapter." + provider + ".")
+		}
 		a.transport = transport
 		a.afterRun = func() {
 			_ = transport.Close()
