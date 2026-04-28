@@ -39,11 +39,20 @@ import (
 // Config carries identity + runtime knobs used by every adapter. An
 // adapter's main() populates this once at startup.
 type Config struct {
-	// Provider is the integration_type provider identifier. Must
-	// match the integration_type manifest's spec.provider. Used in
-	// default endpoint naming (e.g. "yggdrasil.adapter.<provider>.<capability>"
-	// for AMQP queues).
+	// Provider is the integration_type FAMILY identifier (e.g. "rabbitmq",
+	// "grafana"). Must match the integration_type manifest's spec.provider
+	// field — yggdrasil-core sends this in the describe handshake and the
+	// adapter's describe handler typically validates against it. NOT used
+	// for queue/path naming.
 	Provider string
+
+	// IntegrationType is the integration_type ID (e.g. "rabbitmq-topology",
+	// "grafana"). When non-empty, the AMQP transport prefixes consumer
+	// queue names with "yggdrasil.adapter.<integration_type>." to match
+	// what yggdrasil-core publishes to per integration_type.adapter.queues.
+	// Single-provider integrations where IntegrationType == Provider can
+	// leave this empty and the SDK falls back to Provider.
+	IntegrationType string
 
 	// Version identifies the adapter binary build. Surfaced on the
 	// describe handshake so the core can detect drift.

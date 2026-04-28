@@ -62,12 +62,15 @@ func (a *Adapter) ListenHTTP(addr string) *Adapter {
 // construction does not require a live broker (important for unit
 // tests and for binaries that retry on startup).
 //
-// When Config.Provider is set, the AMQP transport prefixes consumer
-// queue names with "yggdrasil.adapter.<provider>." to match the queue
-// names yggdrasil-core publishes to. Without this, an adapter
-// registering "describe" would consume from queue "describe" while
-// core targets "yggdrasil.adapter.<provider>.describe", and requests
-// would silently pile up on the unread queue.
+// The AMQP transport prefixes consumer queue names with
+// "yggdrasil.adapter.<integration_type>." to match what
+// yggdrasil-core publishes to per integration_type.adapter.queues.
+// Prefers Config.IntegrationType (which can differ from Provider when
+// a family hosts multiple integration types — e.g. provider="rabbitmq"
+// with integration types "rabbitmq-topology" / "rabbitmq-runtime"),
+// falling back to Config.Provider for single-type adapters where the
+// two are equal. Without a prefix the adapter would consume from a
+// bare queue name nobody publishes to.
 func (a *Adapter) ListenAMQP(url string) *Adapter {
 	a.beforeRun = func(_ context.Context) error {
 		conn, err := amqp.Dial(url)
@@ -75,8 +78,12 @@ func (a *Adapter) ListenAMQP(url string) *Adapter {
 			return fmt.Errorf("adapter: dial AMQP %q: %w", url, err)
 		}
 		transport := sdkamqp.New(conn)
-		if provider := a.config.Provider; provider != "" {
-			transport.SetEndpointPrefix("yggdrasil.adapter." + provider + ".")
+		queueOwner := a.config.IntegrationType
+		if queueOwner == "" {
+			queueOwner = a.config.Provider
+		}
+		if queueOwner != "" {
+			transport.SetEndpointPrefix("yggdrasil.adapter." + queueOwner + ".")
 		}
 		a.transport = transport
 		a.afterRun = func() {
