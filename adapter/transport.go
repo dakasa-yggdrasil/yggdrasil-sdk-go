@@ -62,6 +62,15 @@ func (a *Adapter) ListenHTTP(addr string) *Adapter {
 // construction does not require a live broker (important for unit
 // tests and for binaries that retry on startup).
 //
+// The dial loop retries on connection-refused / network errors with
+// exponential backoff (capped at 30s, up to 30 attempts ≈ 5 min) so
+// adapter pods that boot before RabbitMQ is ready (a common race in
+// Kubernetes when both come up at the same time, or when the broker
+// is mid-restart) do not flap between CrashLoopBackOff and Running
+// while the cluster catches up. After the budget is exhausted the
+// error is returned so the pod fails loud — that is the right signal
+// for an alert, not silent degradation.
+//
 // The AMQP transport prefixes consumer queue names with
 // "yggdrasil.adapter.<integration_type>." to match what
 // yggdrasil-core publishes to per integration_type.adapter.queues.
@@ -72,10 +81,10 @@ func (a *Adapter) ListenHTTP(addr string) *Adapter {
 // two are equal. Without a prefix the adapter would consume from a
 // bare queue name nobody publishes to.
 func (a *Adapter) ListenAMQP(url string) *Adapter {
-	a.beforeRun = func(_ context.Context) error {
-		conn, err := amqp.Dial(url)
+	a.beforeRun = func(ctx context.Context) error {
+		conn, err := dialAMQPWithRetry(ctx, url)
 		if err != nil {
-			return fmt.Errorf("adapter: dial AMQP %q: %w", url, err)
+			return err
 		}
 		transport := sdkamqp.New(conn)
 		queueOwner := a.config.IntegrationType
@@ -93,4 +102,41 @@ func (a *Adapter) ListenAMQP(url string) *Adapter {
 		return nil
 	}
 	return a
+}
+
+// dialAMQPWithRetry dials url with exponential backoff (1s → 2s → 4s →
+// ... capped at 30s, max 30 attempts). Honors ctx cancellation so
+// SIGTERM / Stop during the retry loop exits promptly. Wraps the final
+// failure with the attempt count so the operator can tell "broker is
+// flat-out down" from "broker is taking forever to come up."
+func dialAMQPWithRetry(ctx context.Context, url string) (*amqp.Connection, error) {
+	const (
+		maxAttempts    = 30
+		initialBackoff = 1 * time.Second
+		maxBackoff     = 30 * time.Second
+	)
+	backoff := initialBackoff
+	var lastErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		conn, err := amqp.Dial(url)
+		if err == nil {
+			return conn, nil
+		}
+		lastErr = err
+		if attempt == maxAttempts {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("adapter: dial AMQP %q cancelled after %d attempts: %w", url, attempt, ctx.Err())
+		case <-time.After(backoff):
+		}
+		if backoff < maxBackoff {
+			backoff *= 2
+			if backoff > maxBackoff {
+				backoff = maxBackoff
+			}
+		}
+	}
+	return nil, fmt.Errorf("adapter: dial AMQP %q failed after %d attempts: %w", url, maxAttempts, lastErr)
 }
