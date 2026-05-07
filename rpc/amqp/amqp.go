@@ -72,6 +72,19 @@ func (t *Transport) SetEndpointPrefix(prefix string) {
 
 // Consume declares the endpoint queue (durable) and starts a
 // consumer that dispatches each delivery to cfg.Handler.
+//
+// The consumer auto-recovers when the AMQP channel closes (broker
+// restart, connection blip, channel reset). Without that, a single
+// transient close would silently strand the subscription — the
+// goroutine reading deliveries would exit when the channel range loop
+// drained, the queue would still exist, but consumer count drops to 0
+// and messages pile up unread. Recovery is event-driven via
+// ch.NotifyClose: each time the channel signals close while sub.done
+// has not been closed by the caller, the subscription tears down the
+// dead channel and re-runs setupConsumer. setupConsumer is idempotent
+// (QueueDeclare with the same params is a no-op) so this is safe to
+// retry. Backoff doubles up to 30s to ride out broker restart windows
+// without thrashing.
 func (t *Transport) Consume(cfg rpc.ConsumerConfig) (rpc.Subscription, error) {
 	if cfg.Endpoint == "" {
 		return nil, fmt.Errorf("amqp consume: endpoint is required")
@@ -88,25 +101,13 @@ func (t *Transport) Consume(cfg rpc.ConsumerConfig) (rpc.Subscription, error) {
 
 	queueName := t.endpointPrefix + cfg.Endpoint
 
-	ch, err := t.conn.Channel()
+	// Validate that we can set up the consumer once before returning to
+	// the caller. After the initial success the subscription owns the
+	// reconnect loop; the caller doesn't need to know recovery is
+	// happening.
+	ch, deliveries, err := t.setupConsumer(queueName, cfg.Concurrency)
 	if err != nil {
-		return nil, fmt.Errorf("amqp consume: open channel: %w", err)
-	}
-
-	if _, err := ch.QueueDeclare(queueName, true, false, false, false, nil); err != nil {
-		_ = ch.Close()
-		return nil, fmt.Errorf("amqp consume: declare queue %q: %w", queueName, err)
-	}
-
-	if err := ch.Qos(cfg.Concurrency, 0, false); err != nil {
-		_ = ch.Close()
-		return nil, fmt.Errorf("amqp consume: set qos: %w", err)
-	}
-
-	deliveries, err := ch.Consume(queueName, "", false, false, false, false, nil)
-	if err != nil {
-		_ = ch.Close()
-		return nil, fmt.Errorf("amqp consume: start consumer %q: %w", queueName, err)
+		return nil, err
 	}
 
 	sub := &subscription{
@@ -116,13 +117,41 @@ func (t *Transport) Consume(cfg rpc.ConsumerConfig) (rpc.Subscription, error) {
 		done:      make(chan struct{}),
 	}
 
-	go sub.run(deliveries, cfg)
+	go sub.runWithReconnect(deliveries, cfg)
 
 	t.subsMu.Lock()
 	t.subs = append(t.subs, sub)
 	t.subsMu.Unlock()
 
 	return sub, nil
+}
+
+// setupConsumer opens a channel, declares the queue (idempotent on
+// re-runs because QueueDeclare with identical parameters is a no-op),
+// sets the prefetch QoS and starts the basic.consume. Factored out of
+// Consume so the subscription's reconnect loop can call it again to
+// rebind after a broker channel close without re-running input
+// validation. Caller owns the returned channel and is responsible for
+// closing it when done.
+func (t *Transport) setupConsumer(queueName string, concurrency int) (*amqp091.Channel, <-chan amqp091.Delivery, error) {
+	ch, err := t.conn.Channel()
+	if err != nil {
+		return nil, nil, fmt.Errorf("amqp consume: open channel: %w", err)
+	}
+	if _, err := ch.QueueDeclare(queueName, true, false, false, false, nil); err != nil {
+		_ = ch.Close()
+		return nil, nil, fmt.Errorf("amqp consume: declare queue %q: %w", queueName, err)
+	}
+	if err := ch.Qos(concurrency, 0, false); err != nil {
+		_ = ch.Close()
+		return nil, nil, fmt.Errorf("amqp consume: set qos: %w", err)
+	}
+	deliveries, err := ch.Consume(queueName, "", false, false, false, false, nil)
+	if err != nil {
+		_ = ch.Close()
+		return nil, nil, fmt.Errorf("amqp consume: start consumer %q: %w", queueName, err)
+	}
+	return ch, deliveries, nil
 }
 
 // Publish sends a fire-and-forget message to req.Endpoint. Headers,
@@ -274,6 +303,7 @@ func (t *Transport) publishChannel() (*amqp091.Channel, error) {
 type subscription struct {
 	transport *Transport
 	endpoint  string
+	chMu      sync.Mutex // guards ch — swapped on reconnect
 	ch        *amqp091.Channel
 	done      chan struct{}
 	closeOnce sync.Once
@@ -281,20 +311,84 @@ type subscription struct {
 
 func (s *subscription) Endpoint() string { return s.endpoint }
 
+func (s *subscription) currentChannel() *amqp091.Channel {
+	s.chMu.Lock()
+	defer s.chMu.Unlock()
+	return s.ch
+}
+
+func (s *subscription) swapChannel(ch *amqp091.Channel) {
+	s.chMu.Lock()
+	defer s.chMu.Unlock()
+	s.ch = ch
+}
+
 func (s *subscription) Close() error {
 	var err error
 	s.closeOnce.Do(func() {
-		err = s.ch.Close()
+		ch := s.currentChannel()
+		if ch != nil {
+			err = ch.Close()
+		}
 		close(s.done)
 	})
 	return err
 }
 
-// run fans each delivery into a handler, respecting concurrency and
-// the per-call timeout. It builds a rpc.Delivery struct wiring its
+// runWithReconnect is the outer loop that re-runs setupConsumer when
+// the AMQP channel closes unexpectedly. The first iteration consumes
+// the deliveries channel handed in by Consume; subsequent iterations
+// rebind via subscription.transport.setupConsumer. Exits cleanly when
+// sub.Close() is called (s.done closed). Each reconnect attempt waits
+// an exponentially backing-off interval (1s → 30s, capped) so a broker
+// in extended downtime does not get hammered.
+func (s *subscription) runWithReconnect(initialDeliveries <-chan amqp091.Delivery, cfg rpc.ConsumerConfig) {
+	deliveries := initialDeliveries
+	backoff := time.Second
+	for {
+		// Deliver-loop returns when the underlying channel closes
+		// (range exit on closed deliveries chan). We then check
+		// whether this was a caller-initiated Close (sub.done) or a
+		// broker-initiated drop (need to reconnect).
+		s.deliverLoop(deliveries, cfg)
+
+		select {
+		case <-s.done:
+			return
+		default:
+		}
+
+		// Channel died unexpectedly. Discard the dead one and try to
+		// rebind. Loop until success or sub.Close() arrives.
+		for {
+			select {
+			case <-s.done:
+				return
+			case <-time.After(backoff):
+			}
+			ch, newDeliveries, err := s.transport.setupConsumer(s.endpoint, cfg.Concurrency)
+			if err == nil {
+				s.swapChannel(ch)
+				deliveries = newDeliveries
+				backoff = time.Second // reset on successful rebind
+				break
+			}
+			if backoff < 30*time.Second {
+				backoff *= 2
+				if backoff > 30*time.Second {
+					backoff = 30 * time.Second
+				}
+			}
+		}
+	}
+}
+
+// deliverLoop fans each delivery into a handler, respecting concurrency
+// and the per-call timeout. It builds a rpc.Delivery struct wiring its
 // Ack/Nack/Reply function fields to the amqp091 primitives on the
-// subscription's channel.
-func (s *subscription) run(deliveries <-chan amqp091.Delivery, cfg rpc.ConsumerConfig) {
+// subscription's channel. Returns when the deliveries channel closes,
+// at which point the outer runWithReconnect decides whether to rebind.
+func (s *subscription) deliverLoop(deliveries <-chan amqp091.Delivery, cfg rpc.ConsumerConfig) {
 	sem := make(chan struct{}, cfg.Concurrency)
 	for raw := range deliveries {
 		raw := raw
@@ -332,7 +426,12 @@ func (s *subscription) run(deliveries <-chan amqp091.Delivery, cfg rpc.ConsumerC
 				}
 				var replyErr error
 				replyOnce.Do(func() {
-					replyErr = s.ch.PublishWithContext(ctx, "", raw.ReplyTo, false, false, amqp091.Publishing{
+					ch := s.currentChannel()
+					if ch == nil {
+						replyErr = fmt.Errorf("amqp delivery: subscription has no active channel")
+						return
+					}
+					replyErr = ch.PublishWithContext(ctx, "", raw.ReplyTo, false, false, amqp091.Publishing{
 						ContentType:   contentType,
 						CorrelationId: raw.CorrelationId,
 						Body:          body,
