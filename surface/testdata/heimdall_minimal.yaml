@@ -1,0 +1,24 @@
+surface: heimdall
+surface_version: 1.0.0
+schema_version: 1
+display_name: Heimdall
+icon: shield-check
+description: "Operador autônomo do cluster"
+permissions:
+  - id: heimdall.pulses.read
+    label: "Ver pulses"
+pages:
+  - id: pulses
+    path: /pulses
+    title: Pulses
+    requires: [heimdall.pulses.read]
+    view:
+      kind: table
+      data_source:
+        endpoint: GET /pulses
+        refresh_interval_s: 30
+      columns:
+        - { field: id, label: "Pulse", format: code }
+        - { field: schedule, label: "Cron", format: code }
+        - { field: last_run_at, label: "Última run", format: timeago }
+        - { field: status, label: "Status", format: badge }

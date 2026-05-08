@@ -84,3 +84,24 @@ in adapter repos document the core version they were built against.
 - [`integration-template`](https://github.com/dakasa-yggdrasil/integration-template)
   — scaffolded adapter repo. `yggdrasil new integration <name>`
   generates an adapter wired to this SDK.
+
+## Surface package
+
+The `surface` subpackage gives an integration adapter the contract used
+by yggdrasil-core to discover console-ops pages/widgets contributed
+by that integration. See `surface/handler.go` for the public API.
+Typical usage:
+
+```go
+//go:embed surface/manifest.yaml
+var manifestFS embed.FS
+
+manifest, err := surface.LoadManifestFromFS(manifestFS, "surface/manifest.yaml")
+if err != nil { logger.Fatal("load surface manifest", zap.Error(err)) }
+
+healthMux := http.NewServeMux()
+healthMux.HandleFunc("/healthz", ...)
+surface.RegisterHandlers(healthMux, manifest, mySurfaceHandler{})
+```
+
+Schema version supported by this SDK: `surface.SchemaVersionCurrent`.
