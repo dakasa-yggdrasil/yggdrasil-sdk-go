@@ -46,3 +46,38 @@ func TestManifestJSONRoundTrip(t *testing.T) {
 		t.Errorf("Permissions: got %+v", got.Permissions)
 	}
 }
+
+func TestFormFieldsJSONRoundTrip(t *testing.T) {
+	m := validManifest()
+	m.Pages = append(m.Pages, Page{
+		ID:    "configure",
+		Path:  "/configure",
+		Title: "Configuração",
+		View: View{
+			Kind:        ViewKindForm,
+			Endpoint:    "POST /configure",
+			Method:      "POST",
+			SubmitLabel: "Salvar Configuração",
+			Fields: []FormField{
+				{Field: "credentials_ref", Label: "Secret Reference", Kind: FormFieldKindString, Required: true},
+				{Field: "token", Label: "Token", Kind: FormFieldKindSecret},
+			},
+		},
+	})
+
+	raw, err := json.Marshal(m)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var got Manifest
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	form := got.Pages[1].View
+	if form.Kind != ViewKindForm || form.Endpoint != "POST /configure" || form.SubmitLabel == "" {
+		t.Fatalf("form view not preserved: %+v", form)
+	}
+	if len(form.Fields) != 2 || form.Fields[1].Kind != FormFieldKindSecret {
+		t.Fatalf("fields not preserved: %+v", form.Fields)
+	}
+}

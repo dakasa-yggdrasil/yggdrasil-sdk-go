@@ -31,6 +31,7 @@ func (m *Manifest) Validate() error {
 	}
 
 	supportedViews := SupportedViewKinds()
+	supportedFormFields := SupportedFormFieldKinds()
 	pageIDs := make(map[string]bool, len(m.Pages))
 	for i := range m.Pages {
 		p := &m.Pages[i]
@@ -52,6 +53,26 @@ func (m *Manifest) Validate() error {
 		}
 		if p.View.Kind == ViewKindCustom && strings.TrimSpace(p.View.Component) == "" {
 			return fmt.Errorf("manifest: page %q kind=custom requires a component name", p.ID)
+		}
+		if p.View.Kind == ViewKindForm {
+			if len(p.View.Fields) == 0 {
+				return fmt.Errorf("manifest: page %q kind=form requires at least one field", p.ID)
+			}
+			for j := range p.View.Fields {
+				f := &p.View.Fields[j]
+				if strings.TrimSpace(f.Field) == "" {
+					return fmt.Errorf("manifest: page %q form field[%d] field is required", p.ID, j)
+				}
+				if strings.TrimSpace(f.Label) == "" {
+					return fmt.Errorf("manifest: page %q form field %q label is required", p.ID, f.Field)
+				}
+				if _, ok := supportedFormFields[f.Kind]; !ok {
+					return fmt.Errorf("manifest: page %q form field %q has unknown kind %q", p.ID, f.Field, f.Kind)
+				}
+				if f.Kind == FormFieldKindSelect && len(f.Options) == 0 {
+					return fmt.Errorf("manifest: page %q form field %q kind=select requires options", p.ID, f.Field)
+				}
+			}
 		}
 	}
 

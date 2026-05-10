@@ -84,6 +84,42 @@ func TestValidate_CustomKindRequiresComponent(t *testing.T) {
 	}
 }
 
+func TestValidate_FormKindRequiresFields(t *testing.T) {
+	m := validManifest()
+	m.Pages[0].View = View{Kind: ViewKindForm}
+	err := m.Validate()
+	if err == nil || !strings.Contains(err.Error(), "requires at least one field") {
+		t.Fatalf("want form fields error, got %v", err)
+	}
+}
+
+func TestValidate_FormKindAcceptsSecretField(t *testing.T) {
+	m := validManifest()
+	m.Pages[0].View = View{
+		Kind: ViewKindForm,
+		Fields: []FormField{
+			{Field: "token", Label: "Token", Kind: FormFieldKindSecret, Required: true},
+		},
+	}
+	if err := m.Validate(); err != nil {
+		t.Fatalf("expected nil, got %v", err)
+	}
+}
+
+func TestValidate_FormKindRejectsUnknownFieldKind(t *testing.T) {
+	m := validManifest()
+	m.Pages[0].View = View{
+		Kind: ViewKindForm,
+		Fields: []FormField{
+			{Field: "token", Label: "Token", Kind: "password"},
+		},
+	}
+	err := m.Validate()
+	if err == nil || !strings.Contains(err.Error(), "unknown kind") {
+		t.Fatalf("want unknown field kind error, got %v", err)
+	}
+}
+
 func TestValidate_DuplicatePageIDsRejected(t *testing.T) {
 	m := validManifest()
 	m.Pages = append(m.Pages, m.Pages[0])

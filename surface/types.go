@@ -77,21 +77,25 @@ type DataSource struct {
 // console; the rest of the fields are kind-specific. Unknown fields
 // are tolerated for forward compatibility.
 type View struct {
-	Kind       string                 `json:"kind" yaml:"kind"`
-	Component  string                 `json:"component,omitempty" yaml:"component,omitempty"`
-	DataSource *DataSource            `json:"data_source,omitempty" yaml:"data_source,omitempty"`
-	Columns    []Column               `json:"columns,omitempty" yaml:"columns,omitempty"`
-	Filters    []Filter               `json:"filters,omitempty" yaml:"filters,omitempty"`
-	RowActions []Action               `json:"row_actions,omitempty" yaml:"row_actions,omitempty"`
-	Item       *TimelineItem          `json:"item,omitempty" yaml:"item,omitempty"`
-	Drawers    []Drawer               `json:"drawers,omitempty" yaml:"drawers,omitempty"`
-	Sections   []DetailSection        `json:"sections,omitempty" yaml:"sections,omitempty"`
-	Metrics    []Metric               `json:"metrics,omitempty" yaml:"metrics,omitempty"`
-	Title      string                 `json:"title,omitempty" yaml:"title,omitempty"`
-	Link       string                 `json:"link,omitempty" yaml:"link,omitempty"`
-	URLField   string                 `json:"url_field,omitempty" yaml:"url_field,omitempty"`
-	Filter     *Filter                `json:"filter,omitempty" yaml:"filter,omitempty"`
-	Extras     map[string]interface{} `json:"extras,omitempty" yaml:"extras,omitempty"`
+	Kind        string                 `json:"kind" yaml:"kind"`
+	Component   string                 `json:"component,omitempty" yaml:"component,omitempty"`
+	DataSource  *DataSource            `json:"data_source,omitempty" yaml:"data_source,omitempty"`
+	Columns     []Column               `json:"columns,omitempty" yaml:"columns,omitempty"`
+	Filters     []Filter               `json:"filters,omitempty" yaml:"filters,omitempty"`
+	RowActions  []Action               `json:"row_actions,omitempty" yaml:"row_actions,omitempty"`
+	Item        *TimelineItem          `json:"item,omitempty" yaml:"item,omitempty"`
+	Drawers     []Drawer               `json:"drawers,omitempty" yaml:"drawers,omitempty"`
+	Sections    []DetailSection        `json:"sections,omitempty" yaml:"sections,omitempty"`
+	Metrics     []Metric               `json:"metrics,omitempty" yaml:"metrics,omitempty"`
+	Endpoint    string                 `json:"endpoint,omitempty" yaml:"endpoint,omitempty"`
+	Method      string                 `json:"method,omitempty" yaml:"method,omitempty"`
+	Fields      []FormField            `json:"fields,omitempty" yaml:"fields,omitempty"`
+	SubmitLabel string                 `json:"submit_label,omitempty" yaml:"submit_label,omitempty"`
+	Title       string                 `json:"title,omitempty" yaml:"title,omitempty"`
+	Link        string                 `json:"link,omitempty" yaml:"link,omitempty"`
+	URLField    string                 `json:"url_field,omitempty" yaml:"url_field,omitempty"`
+	Filter      *Filter                `json:"filter,omitempty" yaml:"filter,omitempty"`
+	Extras      map[string]interface{} `json:"extras,omitempty" yaml:"extras,omitempty"`
 }
 
 // Column describes one column of a table view.
@@ -111,6 +115,18 @@ type Filter struct {
 	Placeholder string                 `json:"placeholder,omitempty" yaml:"placeholder,omitempty"`
 	Options     []string               `json:"options,omitempty" yaml:"options,omitempty"`
 	Applies     map[string]interface{} `json:"applies,omitempty" yaml:"applies,omitempty"`
+}
+
+// FormField describes one field rendered by a form view. Kind "secret"
+// is intentionally separate from "string" so consoles can use password
+// inputs and keep values out of casual screenshots.
+type FormField struct {
+	Field    string      `json:"field" yaml:"field"`
+	Label    string      `json:"label" yaml:"label"`
+	Kind     string      `json:"kind" yaml:"kind"`
+	Required bool        `json:"required,omitempty" yaml:"required,omitempty"`
+	Options  []string    `json:"options,omitempty" yaml:"options,omitempty"`
+	Default  interface{} `json:"default,omitempty" yaml:"default,omitempty"`
 }
 
 // Action describes a button bound to POST /surface/action/<id>.

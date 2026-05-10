@@ -43,6 +43,16 @@ const (
 	FilterKindContribution = "filter-contribution"
 )
 
+// Supported form field kinds.
+const (
+	FormFieldKindString  = "string"
+	FormFieldKindSecret  = "secret"
+	FormFieldKindNumber  = "number"
+	FormFieldKindBoolean = "boolean"
+	FormFieldKindSelect  = "select"
+	FormFieldKindJSON    = "json"
+)
+
 // Slot targets for widgets.
 const (
 	SlotOpsHome             = "ops_home"
@@ -71,5 +81,18 @@ func SupportedViewKinds() map[string]struct{} {
 		ViewKindCustom:        {},
 		ViewKindStatCard:      {},
 		ViewKindFilterContrib: {},
+	}
+}
+
+// SupportedFormFieldKinds returns the set of form field kinds the validator
+// accepts for view.kind=form.
+func SupportedFormFieldKinds() map[string]struct{} {
+	return map[string]struct{}{
+		FormFieldKindString:  {},
+		FormFieldKindSecret:  {},
+		FormFieldKindNumber:  {},
+		FormFieldKindBoolean: {},
+		FormFieldKindSelect:  {},
+		FormFieldKindJSON:    {},
 	}
 }
