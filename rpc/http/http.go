@@ -78,8 +78,23 @@ type Transport struct {
 
 // New builds a Transport. Either Mux (for serving), BaseURL (for
 // client), or both must be set.
-func New(opts Transport) *Transport {
-	t := &opts
+//
+// Accepts a *Transport (not a value) so the call site can never
+// accidentally copy the embedded sync.Mutexes (subsMu, closeMu). The
+// function returns a freshly-allocated Transport — the input is read
+// only for its configuration fields. Pass a composite-literal pointer:
+//
+//	t := sdkhttp.New(&sdkhttp.Transport{Mux: mux})
+func New(opts *Transport) *Transport {
+	if opts == nil {
+		opts = &Transport{}
+	}
+	t := &Transport{
+		Mux:        opts.Mux,
+		BaseURL:    opts.BaseURL,
+		Client:     opts.Client,
+		PathPrefix: opts.PathPrefix,
+	}
 	if t.PathPrefix == "" {
 		t.PathPrefix = DefaultPathPrefix
 	}

@@ -21,7 +21,7 @@ func TestRoundTrip_EndToEnd(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	transport := New(Transport{
+	transport := New(&Transport{
 		BaseURL: srv.URL,
 		Mux:     mux,
 	})
@@ -90,7 +90,7 @@ func TestRequest_UnknownEndpointReturnsErr(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	transport := New(Transport{BaseURL: srv.URL, Mux: mux})
+	transport := New(&Transport{BaseURL: srv.URL, Mux: mux})
 	t.Cleanup(func() { _ = transport.Close() })
 
 	_, err := transport.Request(context.Background(), rpc.Request{
@@ -114,7 +114,7 @@ func TestRequest_TimeoutTranslates(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	transport := New(Transport{BaseURL: srv.URL, Mux: mux})
+	transport := New(&Transport{BaseURL: srv.URL, Mux: mux})
 	t.Cleanup(func() { _ = transport.Close() })
 
 	_, err := transport.Consume(rpc.ConsumerConfig{
@@ -150,7 +150,7 @@ func TestHandler_NackSetsStatus(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	transport := New(Transport{BaseURL: srv.URL, Mux: mux})
+	transport := New(&Transport{BaseURL: srv.URL, Mux: mux})
 	t.Cleanup(func() { _ = transport.Close() })
 
 	_, err := transport.Consume(rpc.ConsumerConfig{
@@ -187,7 +187,7 @@ func TestEnvelope_RawBodyFallback(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	transport := New(Transport{BaseURL: srv.URL, Mux: mux})
+	transport := New(&Transport{BaseURL: srv.URL, Mux: mux})
 	t.Cleanup(func() { _ = transport.Close() })
 
 	var gotBody []byte

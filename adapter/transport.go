@@ -28,7 +28,7 @@ import (
 func (a *Adapter) ListenHTTP(addr string) *Adapter {
 	mux := nethttp.NewServeMux()
 	server := &nethttp.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
-	a.transport = sdkhttp.New(sdkhttp.Transport{Mux: mux})
+	a.transport = sdkhttp.New(&sdkhttp.Transport{Mux: mux})
 
 	a.beforeRun = func(_ context.Context) error {
 		errCh := make(chan error, 1)

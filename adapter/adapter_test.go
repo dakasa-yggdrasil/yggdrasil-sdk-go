@@ -36,7 +36,7 @@ func TestAdapter_RunRejectsMissingTransport(t *testing.T) {
 // zero-handler adapter is almost always a bug.
 func TestAdapter_RunRejectsNoHandlers(t *testing.T) {
 	mux := http.NewServeMux()
-	t0 := sdkhttp.New(sdkhttp.Transport{Mux: mux})
+	t0 := sdkhttp.New(&sdkhttp.Transport{Mux: mux})
 	a := adapter.New(adapter.Config{Provider: "test"}).Transport(t0)
 
 	err := a.Run(context.Background())
@@ -54,7 +54,7 @@ func TestAdapter_HTTPRoundTrip(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	transport := sdkhttp.New(sdkhttp.Transport{Mux: mux, BaseURL: srv.URL})
+	transport := sdkhttp.New(&sdkhttp.Transport{Mux: mux, BaseURL: srv.URL})
 
 	a := adapter.New(adapter.Config{Provider: "test"}).
 		Register("execute", func(ctx context.Context, d rpc.Delivery) ([]byte, string, error) {
