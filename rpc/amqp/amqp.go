@@ -18,20 +18,53 @@ import (
 	amqp091 "github.com/rabbitmq/amqp091-go"
 )
 
+// DialFunc opens a fresh AMQP connection. Used by the transport's
+// reconnect path to replace a broker-dropped connection without the
+// caller having to wire it up. Implementations should retry their own
+// internal backoff if the broker is temporarily unreachable, or return
+// the error and let the transport's outer loop retry with backoff.
+type DialFunc func() (*amqp091.Connection, error)
+
 // Transport is an rpc.Transport backed by one AMQP connection.
 // The connection is expected to outlive the transport; Close closes
 // it along with the shared publish channel.
+//
+// When constructed via NewWithDial (or after SetDialFunc), the
+// transport runs a watchdog goroutine that re-dials the connection on
+// broker-side disconnects (rabbit restart, network blip, idle close).
+// Subscriptions notice the new connection on their next setupConsumer
+// retry and rebind. Without a dial function, the transport falls back
+// to the legacy single-connection mode — sufficient for tests but
+// brittle in production because once the connection dies, no
+// subscription can recover.
 type Transport struct {
-	conn *amqp091.Connection
+	connMu sync.RWMutex
+	conn   *amqp091.Connection
+
+	dialFn DialFunc
 
 	pubMu sync.Mutex
 	pubCh *amqp091.Channel
 
 	closed   chan struct{}
 	closeErr error
+	closeMu  sync.Mutex
 
 	subsMu sync.Mutex
 	subs   []*subscription
+
+	// watchdogOnce ensures we only spawn the connection watchdog
+	// goroutine once even if SetDialFunc is called multiple times or
+	// raced with Consume.
+	watchdogOnce sync.Once
+
+	// dialMu serializes calls to dialFn so that N concurrent
+	// goroutines all hitting a dead connection at once trigger ONE
+	// dial, not N. Without this, an adapter with M subscriptions
+	// would open M sockets at the broker on every reconnect, then
+	// close M-1 of them — wasteful, and on a fully-down broker would
+	// stack M error-handling backoff loops in lockstep.
+	dialMu sync.Mutex
 
 	// endpointPrefix is prepended to ConsumerConfig.Endpoint when
 	// declaring/consuming a queue. It exists because integration_type
@@ -48,6 +81,12 @@ type Transport struct {
 // New wraps an open AMQP connection. Callers provision the connection
 // (via amqp091.Dial or a managed pool) and hand ownership to the
 // transport; Close will close the underlying connection.
+//
+// Transports built with New have NO connection-level reconnect. If the
+// broker drops the connection, every subscription's setupConsumer will
+// keep failing with "connection closed" forever. Use NewWithDial in
+// production; New stays available for tests and for callers that
+// manage connections externally.
 func New(conn *amqp091.Connection) *Transport {
 	return &Transport{
 		conn:   conn,
@@ -55,10 +94,56 @@ func New(conn *amqp091.Connection) *Transport {
 	}
 }
 
+// NewWithDial constructs a Transport that owns its connection and can
+// re-dial when the broker drops it. dialFn is invoked once eagerly to
+// open the initial connection, then again whenever the watchdog
+// observes a NotifyClose without Close having been called. Returns the
+// dial error if the initial connection cannot be opened — at that
+// point retrying is the caller's responsibility (typical pattern:
+// dialAMQPWithRetry around the dialFn before handing it here).
+func NewWithDial(dialFn DialFunc) (*Transport, error) {
+	if dialFn == nil {
+		return nil, errors.New("amqp: NewWithDial requires a non-nil DialFunc")
+	}
+	conn, err := dialFn()
+	if err != nil {
+		return nil, fmt.Errorf("amqp: initial dial: %w", err)
+	}
+	t := &Transport{
+		conn:   conn,
+		dialFn: dialFn,
+		closed: make(chan struct{}),
+	}
+	t.startWatchdog()
+	return t, nil
+}
+
+// SetDialFunc enables connection-level reconnect on a Transport built
+// with New. Useful when the dial function is not available at
+// construction time but the caller wants reconnect semantics anyway.
+// Safe to call from any goroutine; only the first call wires the
+// watchdog.
+func (t *Transport) SetDialFunc(dialFn DialFunc) {
+	if dialFn == nil {
+		return
+	}
+	t.connMu.Lock()
+	t.dialFn = dialFn
+	t.connMu.Unlock()
+	t.startWatchdog()
+}
+
 // Connection returns the underlying amqp connection. Exposed so
 // legacy code that still expects *amqp091.Connection can reach it
 // during the migration. New code should not depend on this.
+//
+// IMPORTANT: when the transport has a DialFunc, the returned pointer
+// becomes stale after a reconnect. Callers that hold the value across
+// any duration MUST re-fetch via Connection() before each use, or
+// expect "connection closed" errors when the broker restarts.
 func (t *Transport) Connection() *amqp091.Connection {
+	t.connMu.RLock()
+	defer t.connMu.RUnlock()
 	return t.conn
 }
 
@@ -85,6 +170,10 @@ func (t *Transport) SetEndpointPrefix(prefix string) {
 // (QueueDeclare with the same params is a no-op) so this is safe to
 // retry. Backoff doubles up to 30s to ride out broker restart windows
 // without thrashing.
+//
+// When the underlying connection is dropped (rabbit pod restart), the
+// transport's watchdog re-dials and replaces t.conn; the subscription's
+// next setupConsumer attempt picks up the new connection automatically.
 func (t *Transport) Consume(cfg rpc.ConsumerConfig) (rpc.Subscription, error) {
 	if cfg.Endpoint == "" {
 		return nil, fmt.Errorf("amqp consume: endpoint is required")
@@ -133,8 +222,18 @@ func (t *Transport) Consume(cfg rpc.ConsumerConfig) (rpc.Subscription, error) {
 // rebind after a broker channel close without re-running input
 // validation. Caller owns the returned channel and is responsible for
 // closing it when done.
+//
+// If the connection itself is closed (broker restart), this attempts a
+// single inline reconnect via the transport's DialFunc before opening
+// the channel. That keeps the failure path one error deep — callers
+// (the subscription reconnect loop) just retry on any error and the
+// backoff handles repeated dial failures.
 func (t *Transport) setupConsumer(queueName string, concurrency int) (*amqp091.Channel, <-chan amqp091.Delivery, error) {
-	ch, err := t.conn.Channel()
+	conn, err := t.connectionForUse()
+	if err != nil {
+		return nil, nil, fmt.Errorf("amqp consume: get connection: %w", err)
+	}
+	ch, err := conn.Channel()
 	if err != nil {
 		return nil, nil, fmt.Errorf("amqp consume: open channel: %w", err)
 	}
@@ -152,6 +251,161 @@ func (t *Transport) setupConsumer(queueName string, concurrency int) (*amqp091.C
 		return nil, nil, fmt.Errorf("amqp consume: start consumer %q: %w", queueName, err)
 	}
 	return ch, deliveries, nil
+}
+
+// connectionForUse returns a live connection, attempting a single
+// inline reconnect if the current one is closed and a DialFunc is
+// available. Returns ErrClosed if Close has been called on the
+// transport. Callers must NOT cache the returned pointer beyond the
+// immediate operation — the watchdog may replace it concurrently.
+func (t *Transport) connectionForUse() (*amqp091.Connection, error) {
+	t.connMu.RLock()
+	conn := t.conn
+	dialFn := t.dialFn
+	t.connMu.RUnlock()
+
+	if conn != nil && !conn.IsClosed() {
+		return conn, nil
+	}
+
+	select {
+	case <-t.closed:
+		return nil, rpc.ErrClosed
+	default:
+	}
+
+	if dialFn == nil {
+		return conn, nil // legacy mode — return the (probably dead) conn and let the caller error out
+	}
+
+	return t.reconnect(dialFn)
+}
+
+// reconnect dials a fresh connection and swaps it in under connMu.
+// dialMu serializes the dial itself so that N concurrent callers
+// against a dead connection produce one socket, not N.
+//
+// The check-after-lock pattern is critical: by the time a goroutine
+// acquires dialMu, the previous holder may have already replaced t.conn
+// with a live one — in that case we return it instead of opening yet
+// another socket. This is the cheap path; the dial only fires when
+// nobody else has reconnected yet.
+func (t *Transport) reconnect(dialFn DialFunc) (*amqp091.Connection, error) {
+	t.dialMu.Lock()
+	defer t.dialMu.Unlock()
+
+	// After acquiring dialMu, re-check whether a previous dial already
+	// installed a live connection. This collapses the M-goroutine
+	// reconnect storm into a single dial.
+	t.connMu.RLock()
+	if t.conn != nil && !t.conn.IsClosed() {
+		conn := t.conn
+		t.connMu.RUnlock()
+		return conn, nil
+	}
+	t.connMu.RUnlock()
+
+	// Also short-circuit if Close happened while we were waiting.
+	select {
+	case <-t.closed:
+		return nil, rpc.ErrClosed
+	default:
+	}
+
+	newConn, err := dialFn()
+	if err != nil {
+		return nil, err
+	}
+
+	t.connMu.Lock()
+	// Close stale connection (may already be closed; tolerant).
+	if t.conn != nil {
+		_ = t.conn.Close()
+	}
+	t.conn = newConn
+	t.connMu.Unlock()
+
+	// Reset the publish channel so the next Publish call opens a fresh
+	// one on the new connection. The old pubCh is bound to the dead
+	// connection and would error on every publish.
+	t.pubMu.Lock()
+	if t.pubCh != nil {
+		_ = t.pubCh.Close()
+		t.pubCh = nil
+	}
+	t.pubMu.Unlock()
+
+	return newConn, nil
+}
+
+// startWatchdog spawns a goroutine that listens for NotifyClose on the
+// current connection and re-dials when the broker drops it. Idempotent
+// — only the first call actually spawns the goroutine.
+//
+// The watchdog reattaches its NotifyClose listener to each new
+// connection so it survives any number of broker restarts. Subscriptions
+// pick up the new connection on their own reconnect cycles; the
+// watchdog only owns the connection itself.
+//
+// Without this, even with a DialFunc set, the transport would only
+// reconnect lazily on the next setupConsumer call. The watchdog makes
+// recovery proactive so publish-only flows (which don't trigger
+// setupConsumer) also see a live connection promptly after a blip.
+func (t *Transport) startWatchdog() {
+	t.watchdogOnce.Do(func() {
+		go t.watchdogLoop()
+	})
+}
+
+func (t *Transport) watchdogLoop() {
+	backoff := time.Second
+	for {
+		select {
+		case <-t.closed:
+			return
+		default:
+		}
+
+		t.connMu.RLock()
+		conn := t.conn
+		dialFn := t.dialFn
+		t.connMu.RUnlock()
+
+		if dialFn == nil {
+			return // no way to reconnect; nothing to watch
+		}
+
+		if conn == nil || conn.IsClosed() {
+			if _, err := t.reconnect(dialFn); err != nil {
+				// Dial failed; back off and retry. Cap so a fully-down
+				// broker doesn't push the retry interval into hours.
+				select {
+				case <-t.closed:
+					return
+				case <-time.After(backoff):
+				}
+				if backoff < 30*time.Second {
+					backoff *= 2
+					if backoff > 30*time.Second {
+						backoff = 30 * time.Second
+					}
+				}
+				continue
+			}
+			backoff = time.Second
+			continue
+		}
+
+		// Connection is live; wait for it to close.
+		notifyClose := conn.NotifyClose(make(chan *amqp091.Error, 1))
+		select {
+		case <-t.closed:
+			return
+		case <-notifyClose:
+			// Connection dropped. Loop body will reconnect.
+			backoff = time.Second
+		}
+	}
 }
 
 // Publish sends a fire-and-forget message to req.Endpoint. Headers,
@@ -187,7 +441,11 @@ func (t *Transport) Request(ctx context.Context, req rpc.Request) (rpc.Reply, er
 		return rpc.Reply{}, fmt.Errorf("amqp request: endpoint is required")
 	}
 
-	ch, err := t.conn.Channel()
+	conn, err := t.connectionForUse()
+	if err != nil {
+		return rpc.Reply{}, fmt.Errorf("amqp request: get connection: %w", err)
+	}
+	ch, err := conn.Channel()
 	if err != nil {
 		return rpc.Reply{}, fmt.Errorf("amqp request: open channel: %w", err)
 	}
@@ -256,11 +514,15 @@ func (t *Transport) Request(ctx context.Context, req rpc.Request) (rpc.Reply, er
 // Close tears down the shared publish channel, every subscription,
 // and the underlying connection. Safe to call multiple times.
 func (t *Transport) Close() error {
+	t.closeMu.Lock()
 	select {
 	case <-t.closed:
+		t.closeMu.Unlock()
 		return t.closeErr
 	default:
 	}
+	close(t.closed)
+	t.closeMu.Unlock()
 
 	t.subsMu.Lock()
 	subs := append([]*subscription(nil), t.subs...)
@@ -278,9 +540,16 @@ func (t *Transport) Close() error {
 	}
 	t.pubMu.Unlock()
 
-	err := t.conn.Close()
+	t.connMu.Lock()
+	conn := t.conn
+	t.conn = nil
+	t.connMu.Unlock()
+
+	var err error
+	if conn != nil {
+		err = conn.Close()
+	}
 	t.closeErr = err
-	close(t.closed)
 	return err
 }
 
@@ -291,7 +560,12 @@ func (t *Transport) publishChannel() (*amqp091.Channel, error) {
 	if t.pubCh != nil && !t.pubCh.IsClosed() {
 		return t.pubCh, nil
 	}
-	ch, err := t.conn.Channel()
+
+	conn, err := t.connectionForUse()
+	if err != nil {
+		return nil, fmt.Errorf("amqp: get connection for publish: %w", err)
+	}
+	ch, err := conn.Channel()
 	if err != nil {
 		return nil, fmt.Errorf("amqp: open publish channel: %w", err)
 	}
@@ -342,6 +616,12 @@ func (s *subscription) Close() error {
 // sub.Close() is called (s.done closed). Each reconnect attempt waits
 // an exponentially backing-off interval (1s → 30s, capped) so a broker
 // in extended downtime does not get hammered.
+//
+// When the underlying connection (not just the channel) is dropped,
+// setupConsumer routes through Transport.connectionForUse which
+// triggers a re-dial via the transport's DialFunc. From the
+// subscription's point of view that is just "the next setupConsumer
+// retry happened to succeed" — no extra plumbing needed here.
 func (s *subscription) runWithReconnect(initialDeliveries <-chan amqp091.Delivery, cfg rpc.ConsumerConfig) {
 	deliveries := initialDeliveries
 	backoff := time.Second

@@ -71,6 +71,15 @@ func (a *Adapter) ListenHTTP(addr string) *Adapter {
 // error is returned so the pod fails loud — that is the right signal
 // for an alert, not silent degradation.
 //
+// Once the initial dial succeeds, the transport is built with
+// NewWithDial so subsequent broker-side disconnects (rabbit pod
+// restart, network blip, idle close) are recovered automatically: the
+// transport's watchdog re-dials the connection in the background and
+// every subscription's channel-reconnect loop picks up the new
+// connection on its next setupConsumer retry. Without that, an adapter
+// would stay Running 1/1 after a rabbit restart with zero AMQP
+// consumers — the failure mode this SDK was bumped to v0.3.0 to fix.
+//
 // The AMQP transport prefixes consumer queue names with
 // "yggdrasil.adapter.<integration_type>." to match what
 // yggdrasil-core publishes to per integration_type.adapter.queues.
@@ -82,11 +91,28 @@ func (a *Adapter) ListenHTTP(addr string) *Adapter {
 // bare queue name nobody publishes to.
 func (a *Adapter) ListenAMQP(url string) *Adapter {
 	a.beforeRun = func(ctx context.Context) error {
+		// Initial dial: blocks with the full retry budget so the pod
+		// only reports Ready after rabbit is reachable.
 		conn, err := dialAMQPWithRetry(ctx, url)
 		if err != nil {
 			return err
 		}
+		// reconnectDial is what the transport calls to re-establish
+		// the connection after a broker drop. The reconnect path uses
+		// a tighter retry budget (single-attempt; the transport
+		// watchdog handles its own backoff loop) so the watchdog
+		// stays responsive — it owns the outer loop, the dial is just
+		// "open a fresh connection now."
+		reconnectDial := func() (*amqp.Connection, error) {
+			return amqp.Dial(url)
+		}
+		// Reuse the connection dialAMQPWithRetry just opened by
+		// constructing the transport with New + SetDialFunc instead
+		// of NewWithDial (which would re-dial immediately). That keeps
+		// the boot path single-dial while still wiring reconnect for
+		// the lifetime of the transport.
 		transport := sdkamqp.New(conn)
+		transport.SetDialFunc(reconnectDial)
 		queueOwner := a.config.IntegrationType
 		if queueOwner == "" {
 			queueOwner = a.config.Provider
@@ -96,8 +122,10 @@ func (a *Adapter) ListenAMQP(url string) *Adapter {
 		}
 		a.transport = transport
 		a.afterRun = func() {
+			// transport.Close also closes the underlying connection,
+			// so no separate conn.Close needed (and a double Close
+			// would error harmlessly anyway).
 			_ = transport.Close()
-			_ = conn.Close()
 		}
 		return nil
 	}
