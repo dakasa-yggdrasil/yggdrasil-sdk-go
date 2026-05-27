@@ -209,3 +209,69 @@ func waitListen(t *testing.T, addr string) {
 	}
 	t.Fatalf("server never accepted on %s", addr)
 }
+
+func TestServer_DuplicateReturns200(t *testing.T) {
+	addr := freeAddr(t)
+	srv := webhookhttp.New(webhookhttp.Config{Addr: addr}).
+		Handle("POST", "/webhook", func(ctx context.Context, d webhookhttp.Delivery) error {
+			return webhookhttp.ErrDuplicate
+		})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go srv.ListenAndServe(ctx)
+	waitListen(t, addr)
+
+	resp, err := http.Post("http://"+addr+"/webhook", "application/json", strings.NewReader("{}"))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 on ErrDuplicate, got %d", resp.StatusCode)
+	}
+}
+
+func TestServer_TerminalErrorReturns400(t *testing.T) {
+	addr := freeAddr(t)
+	srv := webhookhttp.New(webhookhttp.Config{Addr: addr}).
+		Handle("POST", "/webhook", func(ctx context.Context, d webhookhttp.Delivery) error {
+			return &webhookhttp.TerminalError{Cause: errors.New("schema invalid")}
+		})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go srv.ListenAndServe(ctx)
+	waitListen(t, addr)
+
+	resp, err := http.Post("http://"+addr+"/webhook", "application/json", strings.NewReader("{}"))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 on TerminalError, got %d", resp.StatusCode)
+	}
+}
+
+func TestServer_GenericErrorReturns500(t *testing.T) {
+	addr := freeAddr(t)
+	srv := webhookhttp.New(webhookhttp.Config{Addr: addr}).
+		Handle("POST", "/webhook", func(ctx context.Context, d webhookhttp.Delivery) error {
+			return errors.New("kaboom")
+		})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go srv.ListenAndServe(ctx)
+	waitListen(t, addr)
+
+	resp, err := http.Post("http://"+addr+"/webhook", "application/json", strings.NewReader("{}"))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("expected 500 on generic error, got %d", resp.StatusCode)
+	}
+}
