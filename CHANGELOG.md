@@ -4,6 +4,84 @@ All notable changes to `yggdrasil-sdk-go` are documented here. The
 format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [v0.6.0] - 2026-05-27
+
+Auto-emission of mutation events. The §6.5 Golden Rule of the
+Yggdrasil Integration Contract — "every successful ensure_/destroy_
+MUST emit a MutationEvent" — is now satisfied by the SDK on the
+adapter's behalf. Adapter authors stop writing emission boilerplate.
+
+### Added
+
+- **`sdk/events`** — new package:
+  - `MutationEvent` — payload matching INTEGRATION_CONTRACT.md §6.5
+    exactly (event_type / provider / resource / verb / resource_id /
+    instance_id / idempotency / observed / emitted_at).
+  - `Verb` — typed string with constants `VerbEnsured`, `VerbDestroyed`,
+    `VerbCreated` (the last for non-idempotent money-movement actions
+    on the contract allowlist).
+  - `BuildEventType(provider, resource, verb)` — derives the dotted
+    `<provider>.<resource>.<verb>` event_type so callers don't reinvent
+    the format.
+  - `Emitter` interface — single `Emit(ctx, MutationEvent) error`.
+  - `NewHTTPEmitter(opts...)` — production transport against
+    yggdrasil-core's `POST /api/v1/events` endpoint. Reads
+    `YGGDRASIL_CORE_URL` + `YGGDRASIL_RUN_TOKEN` from env, posts with
+    `Authorization: Bearer <token>`, retries transient 5xx with fixed
+    backoff (`WithMaxRetries`/`WithRetryBackoff`), treats 4xx as
+    terminal, honors `context.Context` cancellation between retries.
+  - Options: `WithCoreURL`, `WithToken`, `WithHTTPClient` (for tests),
+    `WithMaxRetries`, `WithRetryBackoff`, `WithEventsPath`.
+  - `NoopEmitter{Logger}` — satisfies `Emitter` without posting;
+    every call logs at WARN so suppression is visible. Zero-value
+    usable (falls back to `log.Printf`).
+
+- **`sdk/reconcile`** — new options on `RegisterReconciler`:
+  - `WithEmitter(events.Emitter)` — wires the auto-emission path.
+    After every successful `Ensure()`, SDK calls
+    `emitter.Emit(MutationEvent{Verb:VerbEnsured, ...})`. After
+    every successful `Destroy()`, SDK calls
+    `emitter.Emit(MutationEvent{Verb:VerbDestroyed, ...})`. `Observe`
+    is read-only and never emits.
+  - `WithProvider(string)` — overrides the integration family written
+    into `MutationEvent.EventType` / `Provider`. Defaults to the
+    adapter's `Config.Provider`.
+  - `WithInstanceID(string)` — sets `MutationEvent.InstanceID`
+    (multi-tenant scope; resolved from the integration_instance
+    label at adapter startup).
+
+### Behavior
+
+- **Best-effort emission.** A failure from `emitter.Emit` logs a
+  WARN but does NOT fail the capability call. Adapter latency and
+  availability MUST NOT depend on event bus health.
+- **No emit on failure.** Ensure() / Destroy() that return an error
+  do not emit — the event records facts, never claims.
+- **Idempotency forwarding.** The execute envelope's optional
+  `idempotency` and `instance_id` fields travel onto the emitted
+  MutationEvent so the downstream event_log can dedup re-emissions
+  across retries.
+- **ResourceID inference.** Looked up via reflection on the observed
+  struct's `ID`/`Id` field, falling back to the marshalled JSON's
+  top-level `id` key. Empty when neither resolves — better than
+  no event at all.
+
+### Compat
+
+- Purely additive. v0.5.x adapters keep building unchanged.
+- Adapters that don't pass `WithEmitter` get exactly one WARN per
+  adapter at startup pointing at the new option. The warning is
+  routed to the stdlib log sink (not `cfg.warnLogger`) so existing
+  legacy-shim tests stay deterministic.
+- `WithLegacyNames` shim removal target moved from v0.6.0 to v0.7.0
+  to make room for the events rollout. Adapters mid-migration keep
+  working; the shim WARN message updated accordingly.
+
+### Dependencies
+
+- No new external dependencies. Uses stdlib only (`net/http`,
+  `encoding/json`, `log`, `context`, `time`, `os`, `reflect`).
+
 ## [v0.5.0] - 2026-05-27
 
 Additive `sdk/reconcile` package — the Go-level expression of the

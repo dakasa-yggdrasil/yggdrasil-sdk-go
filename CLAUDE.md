@@ -36,6 +36,7 @@ sig/hmac/               # v0.4.0: HMAC-SHA256 webhook signature verifiers (Strip
 mtls/                   # v0.4.0: Load *tls.Config from PKCS#12 bundle (file or base64)
 webhookhttp/            # v0.4.0: Inbound webhook listener with HMAC + dedup + body-size primitives
 sdk/reconcile/          # v0.5.0: Reconciler[D,O] interface + RegisterReconciler dispatch + WithLegacyNames compat shim
+sdk/events/             # v0.6.0: MutationEvent + Emitter + NewHTTPEmitter + NoopEmitter (POST /api/v1/events)
 examples/minimal/       # Minimal adapter demonstrating the SDK end-to-end
 protocol/               # (currently empty)
 ```
@@ -102,13 +103,50 @@ protocol/               # (currently empty)
     `destroy_user`) into the adapter's execute dispatch.
     `WithLegacyNames("create_user", ...)` keeps pre-convention names
     working with a WARN shim during the v0.5.x migration window;
-    removed in v0.6.0.
+    removal target moved to **v0.7.0** (was v0.6.0 — v0.6.0 is the
+    events package rollout).
   - Consumed by `integration-efi` v2.0.0, `integration-nfeio` v2.0.0,
     `integration-stripe` v2.0.0 (this rollout's Phase C-E).
+- **v0.6.0 additive package** (CHANGELOG entry 2026-05-27):
+  - `sdk/events` — typed Go expression of INTEGRATION_CONTRACT.md
+    §6.5 Golden Rule. `MutationEvent` payload matches the §6.5 wire
+    shape exactly. `Verb` constants: `VerbEnsured`, `VerbDestroyed`,
+    `VerbCreated` (the last reserved for non-idempotent
+    money-movement allowlist actions). `Emitter` interface.
+  - `NewHTTPEmitter(opts...)` — POSTs to `<YGGDRASIL_CORE_URL>/api/v1/events`
+    with `Authorization: Bearer <YGGDRASIL_RUN_TOKEN>`. Retries
+    transient 5xx with fixed backoff (`WithMaxRetries`,
+    `WithRetryBackoff`); treats 4xx as terminal; honors `context.Context`
+    cancellation. Options: `WithCoreURL`, `WithToken`, `WithHTTPClient`
+    (tests), `WithEventsPath`.
+  - `NoopEmitter` — satisfies `Emitter` without posting, WARNs on
+    every call so suppression is visible.
+  - `sdk/reconcile.RegisterReconciler` gains `WithEmitter`,
+    `WithProvider`, `WithInstanceID` options. When wired, the SDK
+    auto-emits a MutationEvent after every successful `Ensure()` /
+    `Destroy()` invocation. **Emission is best-effort** — an emit
+    error logs WARN but does NOT fail the capability call (adapter
+    availability MUST NOT depend on event bus health).
+  - **Backward compat**: v0.5.0 adapters keep building. Adapters
+    without `WithEmitter` get one WARN per adapter at startup pointing
+    at the new option; routed to stdlib log (not user logger) so
+    existing tests stay deterministic.
+  - Idempotency: when the inbound execute envelope carries an
+    `idempotency` or `instance_id` field, those values forward onto
+    the emitted MutationEvent so the downstream `event_log` table
+    can dedup re-emissions across retries.
+  - ResourceID inference: extracted via reflect on observed struct's
+    `ID`/`Id` field, falling back to top-level `id` in the marshalled
+    JSON. Empty string when neither resolves.
+  - **Zero new external deps** — stdlib only.
 
 ## Recent commits (entire log — small repo)
 
 ```
+<v0.6.0> sdk/events: MutationEvent + Emitter + HTTPEmitter + NoopEmitter
+         sdk/reconcile: WithEmitter auto-emits on Ensure/Destroy success
+<v0.5.0> sdk/reconcile: Reconciler[D,O] + RegisterReconciler + WithLegacyNames shim
+<v0.4.0> sig/hmac + mtls + webhookhttp additive packages
 7a10a9e 🛡️ amqp: connection-level auto-reconnect on broker disconnect   ← v0.3.0
 b115c21 🐛 fix(rpc/http): take *Transport in New to stop sync.Mutex copy
 3e7d407 feat(surface): extend ops surface metadata

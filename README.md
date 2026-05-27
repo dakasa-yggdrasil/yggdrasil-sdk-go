@@ -161,3 +161,47 @@ Return semantics from a `webhookhttp.Handler`:
 | `ErrDuplicate`         | 200 OK         |
 | `*TerminalError`       | 400 Bad Request|
 | any other error        | 500            |
+
+## v0.6.0 — `sdk/events` + auto-emission
+
+Adapter authors stop hand-writing mutation event emission. Wire
+once at startup; the SDK fires the event after every successful
+`Ensure()` / `Destroy()`.
+
+```go
+import (
+    "github.com/dakasa-yggdrasil/yggdrasil-sdk-go/sdk/events"
+    "github.com/dakasa-yggdrasil/yggdrasil-sdk-go/sdk/reconcile"
+)
+
+// One emitter per adapter pod — reads YGGDRASIL_CORE_URL and
+// YGGDRASIL_RUN_TOKEN from env by default.
+emitter := events.NewHTTPEmitter()
+
+reconcile.RegisterReconciler(a, "customer", "customers", customerR,
+    reconcile.WithEmitter(emitter),
+    reconcile.WithProvider("stripe"),
+    reconcile.WithInstanceID(instanceID),
+)
+```
+
+Auto-emitted shape (matches INTEGRATION_CONTRACT.md §6.5):
+
+```jsonc
+{
+  "event_type":   "stripe.customer.ensured",
+  "provider":     "stripe",
+  "resource":     "customer",
+  "verb":         "ensured",
+  "resource_id":  "cus_1234abc",
+  "instance_id":  "stripe-acme",
+  "idempotency":  "ensure_customer_acme_abc",
+  "observed":     { /* full observed state */ },
+  "emitted_at":   "2026-05-27T10:30:00Z"
+}
+```
+
+Emission is best-effort: an emit failure logs WARN but does NOT
+fail the capability call. Local dev / no-bus environments use
+`&events.NoopEmitter{}` which WARNs on each call so suppression
+is visible.
