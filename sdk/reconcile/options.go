@@ -57,3 +57,30 @@ func startsWithAny(s string, prefixes ...string) bool {
 	}
 	return false
 }
+
+// WithLegacyNames declares pre-convention capability names this
+// Reconciler should also accept. The first time a legacy name is
+// invoked, the shim logs a WARN and routes the call to the
+// canonical handler determined by verb prefix:
+//
+//	create_* / update_* / register_* / set_* / apply_* / issue_*
+//	                                                    → ensure_
+//	get_* / list_* / describe_* / lookup_* / retrieve_* → observe_
+//	delete_* / unregister_* / cancel_* / archive_*      → destroy_
+//
+// The shim is removed in SDK v0.6.0. Adapters MUST drop
+// WithLegacyNames before bumping to v0.6.x.
+func WithLegacyNames(names ...string) Option {
+	return func(o *options) {
+		o.legacyNames = append(o.legacyNames, names...)
+	}
+}
+
+// WithWarnLogger overrides the default log.Printf-based WARN emitter
+// the compat shim uses. Tests inject a capturing logger; production
+// adapters typically leave the default in place.
+func WithWarnLogger(logger func(format string, args ...any)) Option {
+	return func(o *options) {
+		o.warnLogger = logger
+	}
+}
