@@ -73,3 +73,25 @@ func TestDiscoverer_InterfaceShape(t *testing.T) {
 		fakeUserReconciler: &fakeUserReconciler{users: map[string]userObserved{}},
 	}
 }
+
+type fakeUserDrift struct{}
+
+func (fakeUserDrift) Drift(d userDesired, o userObserved) bool {
+	return d.Email != o.Email || d.Role != o.Role
+}
+
+func TestDriftReporter_InterfaceShape(t *testing.T) {
+	var _ reconcile.DriftReporter[userDesired, userObserved] = fakeUserDrift{}
+}
+
+func TestDriftReporter_DetectsChange(t *testing.T) {
+	r := fakeUserDrift{}
+	if r.Drift(userDesired{Login: "a", Email: "a@x", Role: "Viewer"},
+		userObserved{ID: "u_a", Login: "a", Email: "a@x", Role: "Editor"}) != true {
+		t.Fatal("expected Drift=true when role differs")
+	}
+	if r.Drift(userDesired{Login: "a", Email: "a@x", Role: "Viewer"},
+		userObserved{ID: "u_a", Login: "a", Email: "a@x", Role: "Viewer"}) != false {
+		t.Fatal("expected Drift=false when desired matches observed")
+	}
+}

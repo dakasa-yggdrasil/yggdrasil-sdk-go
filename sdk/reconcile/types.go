@@ -42,3 +42,14 @@ type Reconciler[D any, O any] interface {
 type Discoverer[O any] interface {
 	Discover(ctx context.Context, scope map[string]any) ([]O, error)
 }
+
+// DriftReporter reports whether observed and desired diverge.
+// Helper for reconciliation workflows that want to know "does the
+// current state match what I asked for?" without re-running Ensure.
+//
+// Adapters that always Ensure on every reconciliation tick may
+// skip this interface; workflows that branch on drift detection
+// (e.g. emit-on-drift telemetry) require it.
+type DriftReporter[D any, O any] interface {
+	Drift(desired D, observed O) bool
+}
