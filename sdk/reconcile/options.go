@@ -86,8 +86,9 @@ func startsWithAny(s string, prefixes ...string) bool {
 //	get_* / list_* / describe_* / lookup_* / retrieve_* → observe_
 //	delete_* / unregister_* / cancel_* / archive_*      → destroy_
 //
-// The shim is removed in SDK v0.6.0. Adapters MUST drop
-// WithLegacyNames before bumping to v0.6.x.
+// The shim's removal target is SDK v0.7.0 (moved from v0.6.0 to make
+// room for the v0.6.0 events package rollout). Adapters MUST drop
+// WithLegacyNames before bumping to v0.7.x.
 func WithLegacyNames(names ...string) Option {
 	return func(o *options) {
 		o.legacyNames = append(o.legacyNames, names...)
