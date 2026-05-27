@@ -35,6 +35,7 @@ surface/                # Optional console-ops surface contract (manifest, handl
 sig/hmac/               # v0.4.0: HMAC-SHA256 webhook signature verifiers (Stripe, GitHub/NFe.io/EFI)
 mtls/                   # v0.4.0: Load *tls.Config from PKCS#12 bundle (file or base64)
 webhookhttp/            # v0.4.0: Inbound webhook listener with HMAC + dedup + body-size primitives
+sdk/reconcile/          # v0.5.0: Reconciler[D,O] interface + RegisterReconciler dispatch + WithLegacyNames compat shim
 examples/minimal/       # Minimal adapter demonstrating the SDK end-to-end
 protocol/               # (currently empty)
 ```
@@ -93,6 +94,17 @@ protocol/               # (currently empty)
     `nil`→202, `ErrDuplicate`→200, `*TerminalError`→400, other→500.
   - Consumed by `integration-stripe`, `integration-nfeio`,
     `integration-efi`.
+- **v0.5.0 additive package** (CHANGELOG entry 2026-05-27):
+  - `sdk/reconcile` — the Go expression of the universal capability
+    naming convention. `Reconciler[D,O]`, `Discoverer[O]`,
+    `DriftReporter[D,O]`. `RegisterReconciler(a, "user", "users", r)`
+    wires three operations (`ensure_user`, `observe_users`,
+    `destroy_user`) into the adapter's execute dispatch.
+    `WithLegacyNames("create_user", ...)` keeps pre-convention names
+    working with a WARN shim during the v0.5.x migration window;
+    removed in v0.6.0.
+  - Consumed by `integration-efi` v2.0.0, `integration-nfeio` v2.0.0,
+    `integration-stripe` v2.0.0 (this rollout's Phase C-E).
 
 ## Recent commits (entire log — small repo)
 

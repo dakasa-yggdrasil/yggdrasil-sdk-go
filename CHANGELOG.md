@@ -4,6 +4,40 @@ All notable changes to `yggdrasil-sdk-go` are documented here. The
 format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [v0.5.0] - 2026-05-27
+
+Additive `sdk/reconcile` package — the Go-level expression of the
+Yggdrasil universal capability naming convention. Adapter authors
+implement Reconciler[D, O] per managed resource type and call
+RegisterReconciler to replace hand-written Execute switch
+boilerplate with three named dispatch entries
+(ensure_/observe_/destroy_).
+
+### Added
+
+- **`sdk/reconcile`** — new package:
+  - `Reconciler[D, O]` — interface with `Ensure(ctx, d) (O, error)`,
+    `Observe(ctx, filter) ([]O, cursor, error)`, `Destroy(ctx, ref) error`.
+  - `Discoverer[O]` — optional sister interface for resources the
+    adapter walks on the provider side.
+  - `DriftReporter[D, O]` — helper for workflows branching on drift.
+  - `RegisterReconciler[D, O](adapter, resource, resourceType, r, opts...)`
+    — wires the canonical triple into the adapter's execute dispatch.
+  - `WithLegacyNames(names...)` — compat shim that accepts pre-v2.0.0
+    capability names alongside the canonical ones; each legacy
+    invocation logs a WARN entry. Removed in v0.6.0.
+  - `WithWarnLogger(fn)` — overrides the shim's log emitter (tests).
+
+### Migration notes
+
+- Purely additive. v0.4.x adapter binaries continue to build against
+  v0.5.0 without modification.
+- Adapters adopting `RegisterReconciler` typically delete their
+  hand-written Execute switch in spec.go in favor of one call per
+  resource type. See `integration-efi` / `integration-nfeio` /
+  `integration-stripe` v2.0.0 for worked examples (this rollout's
+  Phases C-E).
+
 ## [v0.4.0] - 2026-05-26
 
 Three additive packages so the three new public adapters
