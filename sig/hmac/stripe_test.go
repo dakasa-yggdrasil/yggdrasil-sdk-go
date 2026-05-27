@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -115,5 +116,54 @@ func TestVerifyStripe_ToleranceZeroSkipsTimestampCheck(t *testing.T) {
 	}
 	if ts != veryOld {
 		t.Fatalf("expected ts=%d, got %d", veryOld, ts)
+	}
+}
+
+func TestVerifyStripe_MissingTimestamp(t *testing.T) {
+	secret := []byte("whsec_test_abcdef")
+	body := []byte(`{"id":"evt_1"}`)
+	mac := hmac.New(sha256.New, secret)
+	mac.Write([]byte("0." + string(body)))
+	header := "v1=" + hex.EncodeToString(mac.Sum(nil))
+
+	_, err := VerifyStripe(body, header, secret, 300)
+	if !errors.Is(err, ErrMissingTimestamp) {
+		t.Fatalf("expected ErrMissingTimestamp, got %v", err)
+	}
+}
+
+func TestVerifyStripe_MissingV1(t *testing.T) {
+	secret := []byte("whsec_test_abcdef")
+	body := []byte(`{"id":"evt_1"}`)
+	header := fmt.Sprintf("t=%d,v0=abcdef", time.Now().Unix())
+
+	_, err := VerifyStripe(body, header, secret, 300)
+	if !errors.Is(err, ErrMissingV1) {
+		t.Fatalf("expected ErrMissingV1, got %v", err)
+	}
+}
+
+func TestVerifyStripe_EmptyHeader(t *testing.T) {
+	_, err := VerifyStripe([]byte("body"), "", []byte("secret"), 300)
+	if !errors.Is(err, ErrMalformedHeader) {
+		t.Fatalf("expected ErrMalformedHeader for empty header, got %v", err)
+	}
+}
+
+func TestVerifyStripe_MultipleV1ComponentsFirstMatch(t *testing.T) {
+	// Stripe rotates signing keys by emitting multiple v1= components,
+	// signed with old + new secrets. Verifier must accept the request
+	// if ANY component matches the secret in use.
+	secret := []byte("whsec_new")
+	body := []byte(`{"id":"evt_1"}`)
+	now := time.Now().Unix()
+	validSig := stripeSig(t, now, body, secret)
+	// Build "t=<n>,v1=<bogus>,v1=<valid>" by stitching.
+	parts := strings.Split(validSig, ",")
+	merged := parts[0] + ",v1=deadbeef," + parts[1]
+
+	_, err := VerifyStripe(body, merged, secret, 300)
+	if err != nil {
+		t.Fatalf("expected success with at least one matching v1, got %v", err)
 	}
 }
