@@ -4,6 +4,81 @@ All notable changes to `yggdrasil-sdk-go` are documented here. The
 format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [v0.8.0] - 2026-05-27
+
+Closes the latent destroy-credential bug across the entire Yggdrasil
+adapter ecosystem. The legacy `Reconciler.Destroy(ctx, ref)` signature
+receives only the ref string — silently dropping the reserved bridge
+keys (`__instance_credentials` / `__instance_config` / `__request_auth`)
+that adapter `ExecuteHandlers` stash into the desired payload per
+INTEGRATION_CONTRACT.md §5.b. v0.8.0 adds an OPT-IN `DestroyWithDesired[D]`
+interface; when a reconciler implements it, the SDK dispatch path
+prefers it over `Destroy` and passes the FULL parsed desired payload —
+letting destroy resolve auth the same way ensure / observe do.
+
+### Added
+
+- **`sdk/reconcile`** — new opt-in interface:
+  - `DestroyWithDesired[D any] interface { DestroyWithDesired(ctx context.Context, ref string, desired D) error }`
+    — when a `Reconciler[D, O]` ALSO implements this interface, the
+    SDK's `makeDestroyFn` unmarshals the full desired payload (same
+    shape `Ensure` receives) and invokes `DestroyWithDesired`. This
+    allows destroy implementations to extract the reserved bridge keys
+    and forward them through the same dispatch helper `ensure_*` and
+    `observe_*` use.
+  - Backward-compat verified by `destroy_with_desired_test.go`:
+    - Legacy-only reconciler (no `DestroyWithDesired`) → SDK falls
+      through to `Destroy(ctx, ref)`. Verbatim v0.7.0 behavior.
+    - Env-aware reconciler (implements both) → SDK prefers
+      `DestroyWithDesired` and the legacy `Destroy` is NOT called.
+    - Reserved keys (`__instance_credentials`, `__instance_config`,
+      `__request_auth`) round-trip through the SDK into the desired
+      payload `DestroyWithDesired` receives.
+
+### Why this matters (architectural rationale)
+
+Pre-v0.8.0 architecture relied on adapters working around the
+credential-drop by bypassing `reconcile.Dispatch` for destroy
+operations (e.g. `integration-github` v2.4.3 had an
+`if strings.HasPrefix(op, "destroy_")` short-circuit in its
+`ExecuteHandler`). That workaround is a latent bug: every new adapter
+adopting SDK reconcile inherits the same blind spot the moment a
+destroy capability needs credentials. v0.8.0 fixes the root cause —
+the SDK now has a typed shape that supports the canonical destroy +
+the env-aware destroy side by side.
+
+### Compat
+
+- Purely additive at the binary level. v0.7.x adapters keep building
+  unchanged — `DestroyWithDesired` is opt-in; adapters that don't need
+  credentials in destroy continue to implement only the base `Destroy`
+  signature.
+- Adapters that adopt v0.8.0 + `DestroyWithDesired` MAY remove the
+  destroy bypass workarounds from their `ExecuteHandlers`. The
+  `integration-github` v2.5.0 release does so.
+
+### Migration (per adapter)
+
+```go
+// Existing reconciler (works unchanged):
+func (r *channelReconciler) Destroy(ctx context.Context, ref string) error {
+    _, err := r.dispatch(OperationDestroyChannel, r.instanceID, payload{"channel_id": ref})
+    return err
+}
+
+// Add this method to opt into env-aware destroy:
+func (r *channelReconciler) DestroyWithDesired(ctx context.Context, ref string, desired payload) error {
+    if desired == nil { desired = payload{} }
+    desired["channel_id"] = ref
+    _, err := r.dispatch(OperationDestroyChannel, instanceFromPayload(desired, r.instanceID), desired)
+    return err
+}
+```
+
+The SDK invokes whichever method is present — adapters can adopt
+DestroyWithDesired per-reconciler as needed without a wholesale
+migration.
+
 ## [v0.7.0] - 2026-05-27
 
 Promotes the per-adapter reconcile dispatch table to a public
