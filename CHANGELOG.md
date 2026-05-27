@@ -4,6 +4,58 @@ All notable changes to `yggdrasil-sdk-go` are documented here. The
 format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [v0.8.1] - 2026-05-27
+
+Patch release. Closes a destroy emission gap discovered during the
+SDK v0.8.0 cycle Phase C smoke: every `.destroyed` event the SDK
+emitted carried `resource_id: ""` because `makeDestroyFn` only
+extracted ref via `{"ref": "..."}`, while real adapters send
+provider-shaped payloads — `{"channel_id": "C123"}` (slack),
+`{"customer_id": "cus_abc"}` (stripe), `{"owner": "x", "repo": "y"}`
+(github), `{"id": "uuid"}` (grafana), etc. With an empty
+`resource_id`, yggdrasil-core's POST /api/v1/events rejects with
+`HTTP 400: resource_id is required` — and the §6.5 mutation event
+never lands in `event_log`.
+
+### Fixed
+
+- **`sdk/reconcile`** — `makeDestroyFn` now falls back to a flexible
+  payload scan via the new internal helper `inferRefFromInput(input,
+  resource)` when `{"ref": "..."}` is absent from the destroy
+  envelope. Lookup precedence:
+  1. `{"ref": "..."}` (explicit canonical — preserves pre-v0.8.1 behavior)
+  2. `{"<resource>_id": "..."}` (slack `channel_id`, stripe
+     `customer_id`, nfeio `service_invoice_id`, etc.)
+  3. `{"id": "..."}` (grafana, generic shape)
+  4. `{"owner": "x", "repo": "y"}` (github composite — joined as `"x/y"`)
+  5. `{"<resource>": "..."}` (e.g. `repository="owner/repo"`)
+  6. `""` if no identifier resolves — the resulting event will carry
+     an empty `ResourceID` and yggdrasil-core's validator will return
+     a clear 400, surfacing the gap to the adapter maintainer.
+
+  Backward compat verified by `destroy_resource_id_test.go`: 16 unit
+  tests cover the matrix plus precedence rules (explicit ref beats
+  scoped, scoped beats generic, empty values fall through, garbage
+  input doesn't panic). Existing destroy dispatch tests
+  (`destroy_with_desired_test.go`, `register_test.go`,
+  `emit_test.go::TestRegisterReconciler_WithEmitter_EmitsOnDestroySuccess`)
+  continue to pass — the canonical `{"ref": "..."}` path is
+  unchanged.
+
+### Impact
+
+- All 8 adapters pinning SDK v0.8.0 inherit the fix on the next
+  rebuild; no adapter source changes required.
+- Pre-existing `.destroyed` events that failed silently before now
+  emit with the correct `resource_id` field on the wire.
+- No API surface change — `inferRefFromInput` is unexported; the
+  fallback is invisible to callers.
+
+### Compat
+
+- Purely additive at the binary level. No public API change.
+- Tag: `v0.8.1`. Adapters bump `go.mod` from `v0.8.0` and rebuild.
+
 ## [v0.8.0] - 2026-05-27
 
 Closes the latent destroy-credential bug across the entire Yggdrasil

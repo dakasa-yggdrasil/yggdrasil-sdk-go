@@ -304,6 +304,19 @@ func makeDestroyFn[D, O any](r Reconciler[D, O], ec *emitContext) func(context.C
 			}
 		}
 
+		// v0.8.1: when "ref" was not present in the inbound input
+		// shape, scan the input map for an alternate identifier.
+		// Adapters in tree send a variety of destroy payload shapes —
+		// {"channel_id":"C123"} (slack), {"customer_id":"cus_..."}
+		// (stripe), {"owner":"x","repo":"y"} (github composite),
+		// {"id":"..."} (grafana). Without this fallback, ec.emit
+		// receives ref="" and §6.5 events fail with
+		// "HTTP 400: resource_id is required" at yggdrasil-core.
+		// See destroy_resource_id_test.go for the full matrix.
+		if in.Ref == "" && len(env.Input) > 0 {
+			in.Ref = inferRefFromInput(env.Input, ec.resource)
+		}
+
 		// v0.8.0: prefer DestroyWithDesired[D] when the reconciler
 		// implements it. That path receives the FULL parsed desired
 		// payload — including the reserved bridge keys stashed by
@@ -334,6 +347,55 @@ func makeDestroyFn[D, O any](r Reconciler[D, O], ec *emitContext) func(context.C
 		ec.emit(ctx, env, events.VerbDestroyed, in.Ref, observed)
 		return []byte(`{"deleted":true}`), nil
 	}
+}
+
+// inferRefFromInput scans the destroy input payload for a stable
+// resource identifier. Real-world adapter destroys NEVER send
+// `{"ref": ...}` — they send provider-shaped payloads. Without this
+// inference the SDK emits §6.5 events with empty resource_id and
+// yggdrasil-core rejects with HTTP 400.
+//
+// Lookup order:
+//
+//  1. {"ref": "..."}                (explicit canonical)
+//  2. {"<resource>_id": "..."}      (e.g. channel_id, customer_id)
+//  3. {"id": "..."}                 (generic)
+//  4. {"owner": "x", "repo": "y"}   (composite — joined as "x/y", github)
+//  5. {"<resource>": "..."}         (named-after-resource — e.g. repository="owner/repo")
+//
+// Returns "" if no identifier can be derived; the emit attempt then
+// fails at yggdrasil-core's validator (400 resource_id required) —
+// surfacing the gap to maintainers rather than silently emitting a
+// malformed event.
+func inferRefFromInput(input []byte, resource string) string {
+	var m map[string]any
+	if err := json.Unmarshal(input, &m); err != nil {
+		return ""
+	}
+	if v, ok := m["ref"].(string); ok && v != "" {
+		return v
+	}
+	if resource != "" {
+		if v, ok := m[resource+"_id"].(string); ok && v != "" {
+			return v
+		}
+	}
+	if v, ok := m["id"].(string); ok && v != "" {
+		return v
+	}
+	// Composite owner+repo (github pattern).
+	if owner, ok := m["owner"].(string); ok && owner != "" {
+		if repo, ok := m["repo"].(string); ok && repo != "" {
+			return owner + "/" + repo
+		}
+	}
+	// Named-after-resource (e.g. repository="owner/repo").
+	if resource != "" {
+		if v, ok := m[resource].(string); ok && v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // inferResourceID extracts the provider-side ID from the observed
