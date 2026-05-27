@@ -72,3 +72,48 @@ func TestVerifyStripe_TamperedSignatureRejected(t *testing.T) {
 
 // errorsIs is a local alias so the test file imports stay minimal.
 func errorsIs(err, target error) bool { return errors.Is(err, target) }
+
+func TestVerifyStripe_ExpiredTimestamp(t *testing.T) {
+	secret := []byte("whsec_test_abcdef")
+	body := []byte(`{"id":"evt_1"}`)
+	old := time.Now().Unix() - 600 // 10 minutes ago, tolerance 300s
+
+	header := stripeSig(t, old, body, secret)
+
+	ts, err := VerifyStripe(body, header, secret, 300)
+	if !errors.Is(err, ErrTimestampExpired) {
+		t.Fatalf("expected ErrTimestampExpired, got %v", err)
+	}
+	if ts != old {
+		t.Fatalf("expected ts to be parsed even on tolerance failure; got %d want %d", ts, old)
+	}
+}
+
+func TestVerifyStripe_FutureTimestamp(t *testing.T) {
+	secret := []byte("whsec_test_abcdef")
+	body := []byte(`{"id":"evt_1"}`)
+	future := time.Now().Unix() + 600
+
+	header := stripeSig(t, future, body, secret)
+
+	_, err := VerifyStripe(body, header, secret, 300)
+	if !errors.Is(err, ErrTimestampExpired) {
+		t.Fatalf("expected ErrTimestampExpired for future timestamp, got %v", err)
+	}
+}
+
+func TestVerifyStripe_ToleranceZeroSkipsTimestampCheck(t *testing.T) {
+	secret := []byte("whsec_test_abcdef")
+	body := []byte(`{"id":"evt_1"}`)
+	veryOld := time.Now().Unix() - 86400 // 1 day ago
+
+	header := stripeSig(t, veryOld, body, secret)
+
+	ts, err := VerifyStripe(body, header, secret, 0)
+	if err != nil {
+		t.Fatalf("tolerance=0 should skip timestamp check, got %v", err)
+	}
+	if ts != veryOld {
+		t.Fatalf("expected ts=%d, got %d", veryOld, ts)
+	}
+}
