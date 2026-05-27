@@ -4,6 +4,48 @@ All notable changes to `yggdrasil-sdk-go` are documented here. The
 format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [v0.8.3] - 2026-05-27
+
+Patch release. Extends the ensure-path resource_id inference to
+match the v0.8.1 destroy-path fix. Pre-v0.8.3, ensure responses
+shaped like `{"customer_id": "cus_X"}` (stripe), `{"channel_id":
+"C..."}` (slack), or `{"owner": "x", "repo": "y"}` (github) ALL
+resolved to `ResourceID: ""` because `inferResourceID` only checked
+the canonical `id` / `ID` / `Id` keys — and yggdrasil-core's
+validator rejected the emit with HTTP 400. Combined with v0.8.2's
+idempotency synthesis, BOTH ensure and destroy auto-emissions now
+land in `event_log` end-to-end without any caller-side
+instrumentation.
+
+### Fixed
+
+- **`sdk/reconcile.inferResourceID`** — signature extended from
+  `(observed any, body []byte)` to `(observed any, body []byte,
+  resource string)`. Lookup precedence (mirrors `inferRefFromInput`
+  for consistency):
+  1. Struct field `ID` / `Id` via reflect (pre-v0.8.3 behavior, preserved).
+  2. JSON top-level `id` / `ID` / `Id` (pre-v0.8.3 behavior, preserved).
+  3. **NEW**: `<resource>_id` (e.g. `customer_id`, `channel_id`,
+     `service_invoice_id`). Empty values fall through to the next rung.
+  4. **NEW**: composite `{"owner": "x", "repo": "y"}` joined as `"x/y"`
+     (github symmetry with destroy).
+  5. **NEW**: named-after-resource (e.g. `repository="owner/repo"`).
+  6. `""` if nothing resolves — the resulting event will still 400 at
+     yggdrasil-core's validator, surfacing the gap rather than silently
+     swallowing it.
+
+- 9 new unit tests in `sdk/reconcile/ensure_resource_id_test.go`
+  cover the precedence matrix + edge cases (empty body, garbage
+  input, canonical `id` wins over scoped, explicitly empty scoped
+  field falls through).
+
+### Migration notes
+
+No adapter code change required. Bumping the SDK pin from `v0.8.2` →
+`v0.8.3` is sufficient. Adapters whose ensure responses already
+expose a canonical `id` field continue to work identically (rung 2
+still wins). The new rungs only fire when rung 2 finds nothing.
+
 ## [v0.8.2] - 2026-05-27
 
 Patch release. Closes the second emission-validation gap surfaced

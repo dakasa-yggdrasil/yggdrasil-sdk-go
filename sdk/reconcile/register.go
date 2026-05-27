@@ -314,7 +314,7 @@ func makeEnsureFn[D, O any](r Reconciler[D, O], ec *emitContext) func(context.Co
 		if err != nil {
 			return nil, fmt.Errorf("reconcile.Ensure: marshal observed: %w", err)
 		}
-		resourceID := inferResourceID(observed, body)
+		resourceID := inferResourceID(observed, body, ec.resource)
 		ec.emit(ctx, env, events.VerbEnsured, resourceID, body)
 		return body, nil
 	}
@@ -450,17 +450,46 @@ func inferRefFromInput(input []byte, resource string) string {
 //  3. Returns "" when no ID can be derived — the resulting event will
 //     carry an empty ResourceID, which is still better than no event
 //     at all and lets downstream consumers detect the misconfiguration.
-func inferResourceID(observed any, body []byte) string {
+func inferResourceID(observed any, body []byte, resource string) string {
 	if id := reflectID(observed); id != "" {
 		return id
 	}
 	var probe map[string]any
-	if err := json.Unmarshal(body, &probe); err == nil {
-		for _, k := range []string{"id", "ID", "Id"} {
-			if v, ok := probe[k]; ok {
-				if s, ok := v.(string); ok {
-					return s
-				}
+	if err := json.Unmarshal(body, &probe); err != nil {
+		return ""
+	}
+	// 1. Canonical "id" / "ID" / "Id" (the conventional shape).
+	for _, k := range []string{"id", "ID", "Id"} {
+		if v, ok := probe[k]; ok {
+			if s, ok := v.(string); ok && s != "" {
+				return s
+			}
+		}
+	}
+	// 2. v0.8.2: scoped "<resource>_id" (stripe ensure_customer returns
+	//    `{"customer_id": "cus_..."}`; slack ensure_channel returns
+	//    `{"channel_id": "C..."}`; the canonical `id` field is often
+	//    absent from response shapes that mirror provider semantics).
+	if resource != "" {
+		if v, ok := probe[resource+"_id"]; ok {
+			if s, ok := v.(string); ok && s != "" {
+				return s
+			}
+		}
+	}
+	// 3. v0.8.2: composite owner+repo (github ensure_repository returns
+	//    `{"owner": "x", "repo": "y", ...}` from the ensure path too —
+	//    not just destroy. Mirrors inferRefFromInput precedence.
+	if owner, ok := probe["owner"].(string); ok && owner != "" {
+		if repo, ok := probe["repo"].(string); ok && repo != "" {
+			return owner + "/" + repo
+		}
+	}
+	// 4. v0.8.2: named-after-resource (`repository="owner/repo"` shape).
+	if resource != "" {
+		if v, ok := probe[resource]; ok {
+			if s, ok := v.(string); ok && s != "" {
+				return s
 			}
 		}
 	}
