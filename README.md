@@ -105,3 +105,59 @@ surface.RegisterHandlers(healthMux, manifest, mySurfaceHandler{})
 ```
 
 Schema version supported by this SDK: `surface.SchemaVersionCurrent`.
+
+## v0.4.0 packages
+
+Three additive packages cover the boilerplate shared by webhook-receiving
+adapters (`integration-stripe`, `integration-nfeio`, `integration-efi`).
+
+### `sig/hmac` — webhook signature verifiers
+
+```go
+import sdkhmac "github.com/dakasa-yggdrasil/yggdrasil-sdk-go/sig/hmac"
+
+// Stripe: t=<unix>,v1=<hex> with 5-minute tolerance
+ts, err := sdkhmac.VerifyStripe(body, r.Header.Get("Stripe-Signature"), secret, 300)
+
+// GitHub / NFe.io / EFI: X-Hub-Signature-256: sha256=<hex>
+err := sdkhmac.VerifyHubSignature256(body, r.Header.Get("X-Hub-Signature-256"), secret)
+```
+
+### `mtls` — load *tls.Config from a P12 bundle
+
+```go
+import "github.com/dakasa-yggdrasil/yggdrasil-sdk-go/mtls"
+
+// Convention-over-config: read EFI_MTLS_ENABLED / EFI_CERTIFICATE /
+// EFI_CERTIFICATE_BASE64 / EFI_CERTIFICATE_PASSWORD from env.
+tlsCfg, err := mtls.LoadFromEnv("EFI")
+if err != nil { log.Fatal(err) }
+// tlsCfg is nil when EFI_MTLS_ENABLED=false; callers branch on nil.
+
+client := &http.Client{Transport: &http.Transport{TLSClientConfig: tlsCfg}}
+```
+
+### `webhookhttp` — minimal inbound webhook server
+
+```go
+import "github.com/dakasa-yggdrasil/yggdrasil-sdk-go/webhookhttp"
+
+srv := webhookhttp.New(webhookhttp.Config{Addr: ":8082"}).
+    Handle("POST", "/webhooks/stripe", handleStripe,
+        webhookhttp.WithVerifyFunc(func(r *http.Request, body []byte) error {
+            _, err := sdkhmac.VerifyStripe(body, r.Header.Get("Stripe-Signature"), secret, 300)
+            return err
+        }),
+    )
+
+go srv.ListenAndServe(ctx)
+```
+
+Return semantics from a `webhookhttp.Handler`:
+
+| Return value           | HTTP response  |
+|------------------------|----------------|
+| `nil`                  | 202 Accepted   |
+| `ErrDuplicate`         | 200 OK         |
+| `*TerminalError`       | 400 Bad Request|
+| any other error        | 500            |

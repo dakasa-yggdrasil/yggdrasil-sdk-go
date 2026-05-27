@@ -32,6 +32,9 @@ rpc/                    # Transport interface (rpc.Transport, rpc.Delivery, rpc.
 rpc/amqp/               # AMQP 0-9-1 implementation (the production transport)
 rpc/http/               # HTTP/JSON implementation (for adapters exposed as k8s Service)
 surface/                # Optional console-ops surface contract (manifest, handlers, validator)
+sig/hmac/               # v0.4.0: HMAC-SHA256 webhook signature verifiers (Stripe, GitHub/NFe.io/EFI)
+mtls/                   # v0.4.0: Load *tls.Config from PKCS#12 bundle (file or base64)
+webhookhttp/            # v0.4.0: Inbound webhook listener with HMAC + dedup + body-size primitives
 examples/minimal/       # Minimal adapter demonstrating the SDK end-to-end
 protocol/               # (currently empty)
 ```
@@ -78,6 +81,18 @@ protocol/               # (currently empty)
 - **`adapter.ListenAMQP` retry/backoff** (commit `010e964`) — retries
   the initial AMQP dial with exponential backoff so a pod-startup
   race against rabbit doesn't crashloop.
+- **v0.4.0 additive packages** (CHANGELOG entry 2026-05-26):
+  - `sig/hmac` — provider-specific HMAC verifiers. `VerifyStripe`
+    parses `t=<unix>,v1=<hex>`; `VerifyHubSignature256` parses
+    `sha256=<hex>`. All use `crypto/subtle.ConstantTimeCompare`.
+  - `mtls` — `Load(Config{Source, Path, Base64, Password})` plus
+    `LoadFromEnv(prefix)`. Reads `{PREFIX}_MTLS_ENABLED`,
+    `{PREFIX}_CERTIFICATE`, `{PREFIX}_CERTIFICATE_BASE64`.
+  - `webhookhttp` — `Server.Handle(method, path, h, ...HandlerOption)`,
+    `ListenAndServe(ctx)`. Return-value→status mapping:
+    `nil`→202, `ErrDuplicate`→200, `*TerminalError`→400, other→500.
+  - Consumed by `integration-stripe`, `integration-nfeio`,
+    `integration-efi`.
 
 ## Recent commits (entire log — small repo)
 
