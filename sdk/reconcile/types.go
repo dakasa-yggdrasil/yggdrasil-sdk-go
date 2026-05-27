@@ -29,3 +29,16 @@ type Reconciler[D any, O any] interface {
 	// and it does not.
 	Destroy(ctx context.Context, ref string) error
 }
+
+// Discoverer is the optional sister interface for resources the
+// adapter should walk on the provider side — finding resources
+// that exist in the provider's account/namespace including
+// resources the adapter did not create.
+//
+// This is distinct from Observe: Observe retrieves resources by
+// known identity or known filter; Discover enumerates without
+// prior knowledge. Reconciliation workflows that need to import
+// existing provider-side state implement this.
+type Discoverer[O any] interface {
+	Discover(ctx context.Context, scope map[string]any) ([]O, error)
+}

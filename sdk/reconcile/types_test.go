@@ -56,3 +56,20 @@ func TestReconciler_InterfaceShape(t *testing.T) {
 	// is exported with the expected method set.
 	var _ reconcile.Reconciler[userDesired, userObserved] = &fakeUserReconciler{users: map[string]userObserved{}}
 }
+
+// fakeUserDiscoverer adds discover_ semantics to fakeUserReconciler.
+type fakeUserDiscoverer struct{ *fakeUserReconciler }
+
+func (d *fakeUserDiscoverer) Discover(ctx context.Context, scope map[string]any) ([]userObserved, error) {
+	out := make([]userObserved, 0, len(d.users))
+	for _, u := range d.users {
+		out = append(out, u)
+	}
+	return out, nil
+}
+
+func TestDiscoverer_InterfaceShape(t *testing.T) {
+	var _ reconcile.Discoverer[userObserved] = &fakeUserDiscoverer{
+		fakeUserReconciler: &fakeUserReconciler{users: map[string]userObserved{}},
+	}
+}
