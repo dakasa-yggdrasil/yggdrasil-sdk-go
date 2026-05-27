@@ -106,13 +106,14 @@ func TestInferResourceID_EmptyScopedFallsThrough(t *testing.T) {
 // the type assertion `v.(string)` returned false and inference fell
 // through to "" — and github.repository.ensured emitted with empty
 // resource_id, rejected by yggdrasil-core with HTTP 400.
+// v0.8.5 pin: integer-valued floats are formatted as integers
+// (was previously "%g" which produced "1.234e+09" scientific
+// notation for IDs >= 1e9).
 func TestInferResourceID_NumericID(t *testing.T) {
-	// GitHub repo ID — JSON number; json.Unmarshal into map[string]any
-	// decodes as float64.
 	body := []byte(`{"id": 1234567890, "name": "smoketest"}`)
 	got := inferResourceID(nil, body, "repository")
-	if got != "1.23456789e+09" && got != "1234567890" {
-		t.Fatalf("expected numeric id coerced to string, got %q", got)
+	if got != "1234567890" {
+		t.Fatalf("expected integer-format numeric id, got %q", got)
 	}
 }
 

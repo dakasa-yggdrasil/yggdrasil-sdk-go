@@ -4,6 +4,22 @@ All notable changes to `yggdrasil-sdk-go` are documented here. The
 format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [v0.8.5] - 2026-05-27
+
+Patch release. Polishes the v0.8.4 numeric coercion: integer-valued
+floats now format as integers (`"1234567890"`) instead of scientific
+notation (`"1.234567890e+09"`). Same precedence and same set of
+shapes are still accepted — only the rendered string changes for
+large integer IDs.
+
+### Fixed
+
+- **`sdk/reconcile.coerceToNonEmptyString`** — float64 branch now
+  formats integer-valued values via `%d`, falling back to `%g` only
+  for true fractions. github.repository.ensured event_log
+  `aggregate_id` is now `"1234567890"` instead of
+  `"1.23456789e+09"`.
+
 ## [v0.8.4] - 2026-05-27
 
 Patch release. Closes the final gap in the v0.8.x §6.5 emission

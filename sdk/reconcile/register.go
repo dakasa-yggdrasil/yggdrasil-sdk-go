@@ -522,13 +522,17 @@ func coerceToNonEmptyString(v any) string {
 	case float64:
 		// json.Unmarshal into map[string]any decodes numbers as
 		// float64. GitHub repo IDs fit in float64 without loss
-		// (well under 2^53).
+		// (well under 2^53). Format as an integer when the value is
+		// integral (resource_ids are by convention integer-shaped
+		// when numeric); %g would otherwise produce scientific
+		// notation for large IDs ("1.234e+09").
 		if x == 0 {
 			return ""
 		}
-		// Strip trailing ".0" — GitHub IDs are integers.
-		s := fmt.Sprintf("%g", x)
-		return s
+		if x == float64(int64(x)) {
+			return fmt.Sprintf("%d", int64(x))
+		}
+		return fmt.Sprintf("%g", x)
 	case int:
 		if x == 0 {
 			return ""
