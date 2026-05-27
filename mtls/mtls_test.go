@@ -103,3 +103,20 @@ func TestLoad_FromFileMalformedP12(t *testing.T) {
 		t.Fatal("expected pkcs12 decode error, got nil")
 	}
 }
+
+func TestLoad_Disabled(t *testing.T) {
+	tlsCfg, err := Load(Config{Source: SourceDisabled})
+	if err != nil {
+		t.Fatalf("expected nil error for SourceDisabled, got %v", err)
+	}
+	if tlsCfg != nil {
+		t.Fatalf("expected nil *tls.Config for SourceDisabled, got %+v", tlsCfg)
+	}
+}
+
+func TestLoad_UnknownSource(t *testing.T) {
+	_, err := Load(Config{Source: Source(99)})
+	if err == nil {
+		t.Fatal("expected error for unknown Source value, got nil")
+	}
+}
