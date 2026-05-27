@@ -363,16 +363,13 @@ func reflectID(v any) string {
 	return ""
 }
 
-// ExecuteForTest invokes the adapter's synthesized execute handler
-// directly so package-external tests can verify dispatch without
-// booting a transport. NOT for production use — adapters call
-// adapter.Run which wires the transport.
+// ExecuteForTest is the v0.5.0 / v0.6.0 entry point into the
+// per-adapter dispatch table. Promoted to a public production API as
+// reconcile.Dispatch in v0.7.0; this alias remains for one minor
+// cycle so adapters mid-migration keep building.
+//
+// Deprecated: use reconcile.Dispatch — semantically identical. Will
+// be removed at v1.0.0.
 func ExecuteForTest(ctx context.Context, a *adapter.Adapter, d rpc.Delivery) ([]byte, string, error) {
-	dispatchTablesMu.Lock()
-	t, ok := dispatchTables[a]
-	dispatchTablesMu.Unlock()
-	if !ok {
-		return nil, "", fmt.Errorf("reconcile: adapter has no registered Reconciler")
-	}
-	return buildExecuteHandler(t)(ctx, d)
+	return Dispatch(ctx, a, d)
 }
