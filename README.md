@@ -248,3 +248,48 @@ patterns:
 
 `reconcile.ExecuteForTest` is now a deprecated alias delegating to
 `reconcile.Dispatch`. Removed at `v1.0.0`.
+
+## v0.8.0 — `DestroyWithDesired` env-aware destruction
+
+The base `Reconciler[D, O].Destroy(ctx, ref)` signature receives only
+the ref string. That's the right canonical shape for destruction by
+stable provider-side identity — but it does NOT see reserved bridge
+keys (`__instance_credentials` / `__instance_config` /
+`__request_auth`) that adapter `ExecuteHandlers` stash into the
+desired payload to forward per-request auth context through the SDK
+transport (per INTEGRATION_CONTRACT.md §5.b op-echo cycle). For
+adapters that load credentials per-request — the dominant pattern
+across the ecosystem — `destroy_*` operations therefore silently lose
+auth context unless the reconciler can see the full desired map.
+
+The new `DestroyWithDesired[D]` interface closes this gap. When a
+`Reconciler[D, O]` ALSO implements `DestroyWithDesired[D]`, the SDK
+dispatch path prefers `DestroyWithDesired` over `Destroy` and passes
+the FULL unmarshalled desired payload to it:
+
+```go
+type repoReconciler struct {
+    dispatch   dispatchFn
+    instanceID string
+}
+
+// Legacy — kept for backward compat / direct callers.
+func (r *repoReconciler) Destroy(ctx context.Context, ref string) error {
+    _, err := r.dispatch(OperationDestroyRepository, r.instanceID, payload{"ref": ref})
+    return err
+}
+
+// Env-aware — preferred by SDK v0.8.0 dispatch. Sees reserved
+// bridge keys (__instance_credentials etc) so the dispatch helper
+// can resolve auth context the same way ensure_* and observe_* do.
+func (r *repoReconciler) DestroyWithDesired(ctx context.Context, ref string, desired payload) error {
+    if desired == nil { desired = payload{} }
+    desired["ref"] = ref
+    _, err := r.dispatch(OperationDestroyRepository, instanceFromPayload(desired, r.instanceID), desired)
+    return err
+}
+```
+
+This interface is OPT-IN. Reconcilers that don't need credentials in
+destroy continue implementing only `Destroy(ctx, ref)` and keep
+building unchanged — `v0.7.x` behavior is preserved verbatim.
