@@ -120,3 +120,60 @@ func TestLoad_UnknownSource(t *testing.T) {
 		t.Fatal("expected error for unknown Source value, got nil")
 	}
 }
+
+func TestLoadFromEnv_Disabled(t *testing.T) {
+	t.Setenv("EFI_MTLS_ENABLED", "false")
+	t.Setenv("EFI_CERTIFICATE", "/path/should/be/ignored.p12")
+
+	tlsCfg, err := LoadFromEnv("EFI")
+	if err != nil {
+		t.Fatalf("LoadFromEnv with MTLS_ENABLED=false should not error, got %v", err)
+	}
+	if tlsCfg != nil {
+		t.Fatalf("expected nil *tls.Config when disabled, got %+v", tlsCfg)
+	}
+}
+
+func TestLoadFromEnv_FromFile(t *testing.T) {
+	wd, _ := os.Getwd()
+	t.Setenv("EFI_MTLS_ENABLED", "true")
+	t.Setenv("EFI_CERTIFICATE", wd+"/testdata/client-cert.p12")
+	t.Setenv("EFI_CERTIFICATE_BASE64", "")
+
+	tlsCfg, err := LoadFromEnv("EFI")
+	if err != nil {
+		t.Fatalf("LoadFromEnv failed: %v", err)
+	}
+	if len(tlsCfg.Certificates) != 1 {
+		t.Fatalf("expected 1 cert, got %d", len(tlsCfg.Certificates))
+	}
+}
+
+func TestLoadFromEnv_FromBase64(t *testing.T) {
+	raw, err := os.ReadFile("testdata/client-cert.p12")
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	t.Setenv("EFI_MTLS_ENABLED", "true")
+	t.Setenv("EFI_CERTIFICATE", "")
+	t.Setenv("EFI_CERTIFICATE_BASE64", base64.StdEncoding.EncodeToString(raw))
+
+	tlsCfg, err := LoadFromEnv("EFI")
+	if err != nil {
+		t.Fatalf("LoadFromEnv(base64) failed: %v", err)
+	}
+	if len(tlsCfg.Certificates) != 1 {
+		t.Fatalf("expected 1 cert, got %d", len(tlsCfg.Certificates))
+	}
+}
+
+func TestLoadFromEnv_BothEmpty(t *testing.T) {
+	t.Setenv("EFI_MTLS_ENABLED", "true")
+	t.Setenv("EFI_CERTIFICATE", "")
+	t.Setenv("EFI_CERTIFICATE_BASE64", "")
+
+	_, err := LoadFromEnv("EFI")
+	if err == nil {
+		t.Fatal("expected error when MTLS_ENABLED=true and both cert sources are empty")
+	}
+}

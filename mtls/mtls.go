@@ -65,6 +65,41 @@ func Load(cfg Config) (*tls.Config, error) {
 	}
 }
 
+// LoadFromEnv builds a Config from environment variables and calls
+// Load. The variable names are derived from a prefix:
+//
+//	{PREFIX}_MTLS_ENABLED        — "false" / "0" / "" → SourceDisabled
+//	                               anything else      → continue
+//	{PREFIX}_CERTIFICATE         — when non-empty,    → SourceFile
+//	{PREFIX}_CERTIFICATE_BASE64  — when non-empty,    → SourceBase64
+//	{PREFIX}_CERTIFICATE_PASSWORD — optional, used by SourceFile/Base64
+//
+// {PREFIX}_CERTIFICATE takes precedence over the base64 variant when
+// both are set.
+//
+// Adapter convention: integration-efi uses prefix "EFI",
+// integration-stripe uses prefix "STRIPE", and so on.
+func LoadFromEnv(prefix string) (*tls.Config, error) {
+	enabled := os.Getenv(prefix + "_MTLS_ENABLED")
+	switch enabled {
+	case "", "false", "0", "False", "FALSE":
+		return Load(Config{Source: SourceDisabled})
+	}
+
+	path := os.Getenv(prefix + "_CERTIFICATE")
+	b64 := os.Getenv(prefix + "_CERTIFICATE_BASE64")
+	pwd := os.Getenv(prefix + "_CERTIFICATE_PASSWORD")
+
+	switch {
+	case path != "":
+		return Load(Config{Source: SourceFile, Path: path, Password: pwd})
+	case b64 != "":
+		return Load(Config{Source: SourceBase64, Base64: b64, Password: pwd})
+	default:
+		return nil, fmt.Errorf("mtls: %s_MTLS_ENABLED=true but neither %s_CERTIFICATE nor %s_CERTIFICATE_BASE64 is set", prefix, prefix, prefix)
+	}
+}
+
 func loadFromP12Bytes(raw []byte, password string) (*tls.Config, error) {
 	if len(raw) == 0 {
 		return nil, errors.New("mtls: empty P12 payload")
