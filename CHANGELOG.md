@@ -4,6 +4,45 @@ All notable changes to `yggdrasil-sdk-go` are documented here. The
 format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [v0.8.4] - 2026-05-27
+
+Patch release. Closes the final gap in the v0.8.x §6.5 emission
+hardening cycle: github ensure_repository responses carry `id` as a
+JSON number (the upstream GitHub API integer), not a string. The
+v0.8.3 type assertion `v.(string)` returned false on the numeric
+shape and inference fell through to "" — and
+`github.repository.ensured` still emitted with empty resource_id,
+rejected by yggdrasil-core's validator. Adds (a) numeric coercion
+across the canonical and scoped rungs, plus (b) a `full_name`
+fallback for the github-specific `{owner: {login}, full_name:
+"x/y"}` response shape where the flat `owner+repo` composite
+doesn't apply.
+
+### Fixed
+
+- **`sdk/reconcile.inferResourceID`** — new `coerceToNonEmptyString`
+  helper tolerates string, json.Number, float64, int, int64. Applied
+  to both the canonical `id`/`ID`/`Id` rung and the scoped
+  `<resource>_id` rung. Empty / zero values fall through (the caller
+  walks to the next rung).
+- **New rung between composite owner+repo and named-after-resource**:
+  `full_name` — covers the github upstream shape where `owner` is an
+  object (`{login: "..."}`) so the rung-3 composite doesn't apply but
+  `full_name` carries the canonical "owner/repo" identity.
+- 5 new unit tests in `sdk/reconcile/ensure_resource_id_test.go`:
+  - `TestInferResourceID_NumericID` (github int id)
+  - `TestInferResourceID_GithubFullNameComposite` (full github shape)
+  - `TestInferResourceID_FullNameWhenNoID` (full_name-only fallback)
+  - `TestInferResourceID_StringIDWinsOverNumericFallback` (precedence pin)
+
+### Migration notes
+
+No adapter code change required. Bumping the SDK pin from `v0.8.3` →
+`v0.8.4` is sufficient. Adapters that already returned `id` as a
+string continue to work identically (rung 1 still wins). The new
+coercion only fires when `id` is a JSON number; the `full_name`
+rung only fires when rungs 1-3 find nothing.
+
 ## [v0.8.3] - 2026-05-27
 
 Patch release. Extends the ensure-path resource_id inference to

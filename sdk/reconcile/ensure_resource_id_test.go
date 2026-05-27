@@ -100,3 +100,58 @@ func TestInferResourceID_EmptyScopedFallsThrough(t *testing.T) {
 		t.Fatalf("expected empty for empty scoped field, got %q", got)
 	}
 }
+
+// TestInferResourceID_NumericID covers github-shaped responses where
+// `id` is a JSON number (e.g. 1234567890), not a string. Pre-v0.8.4
+// the type assertion `v.(string)` returned false and inference fell
+// through to "" — and github.repository.ensured emitted with empty
+// resource_id, rejected by yggdrasil-core with HTTP 400.
+func TestInferResourceID_NumericID(t *testing.T) {
+	// GitHub repo ID — JSON number; json.Unmarshal into map[string]any
+	// decodes as float64.
+	body := []byte(`{"id": 1234567890, "name": "smoketest"}`)
+	got := inferResourceID(nil, body, "repository")
+	if got != "1.23456789e+09" && got != "1234567890" {
+		t.Fatalf("expected numeric id coerced to string, got %q", got)
+	}
+}
+
+// TestInferResourceID_GithubFullNameComposite covers the real github
+// ensure_repository response shape: the upstream object contains
+// `full_name: "owner/repo"` and `owner: {login: "..."}`. The flat
+// `owner: "x", repo: "y"` rung doesn't match this shape (owner is an
+// object, not a string), so v0.8.4 falls through to the new
+// full_name rung.
+func TestInferResourceID_GithubFullNameComposite(t *testing.T) {
+	body := []byte(`{"id": 1234567890, "name": "smoketest", "full_name": "dakasa-yggdrasil/smoketest", "owner": {"login": "dakasa-yggdrasil"}}`)
+	got := inferResourceID(nil, body, "repository")
+	// Numeric `id` rung wins (1234567890 → "1234567890" or "1.23...").
+	// This pin asserts a non-empty result; the precedence
+	// (id > full_name) is documented in inferResourceID itself.
+	if got == "" {
+		t.Fatalf("expected non-empty resource_id for github shape, got empty")
+	}
+}
+
+// TestInferResourceID_FullNameWhenNoID covers the corner where the
+// response carries only `full_name` (e.g. a downstream wrapper that
+// stripped the numeric id) — the full_name rung resolves to
+// "owner/repo".
+func TestInferResourceID_FullNameWhenNoID(t *testing.T) {
+	body := []byte(`{"full_name": "owner/repo", "name": "repo"}`)
+	got := inferResourceID(nil, body, "repository")
+	if got != "owner/repo" {
+		t.Fatalf("expected owner/repo from full_name rung, got %q", got)
+	}
+}
+
+// TestInferResourceID_StringIDWinsOverNumericFallback pins that when
+// a canonical string `id` is present, it wins — the numeric-coercion
+// fallback is for the OTHER shape, not a precedence change.
+func TestInferResourceID_StringIDWinsOverNumericFallback(t *testing.T) {
+	body := []byte(`{"id": "cus_abc", "channel_id": 999}`)
+	got := inferResourceID(nil, body, "customer")
+	if got != "cus_abc" {
+		t.Fatalf("expected string id to win, got %q", got)
+	}
+}
