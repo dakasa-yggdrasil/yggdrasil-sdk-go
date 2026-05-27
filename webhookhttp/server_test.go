@@ -275,3 +275,34 @@ func TestServer_GenericErrorReturns500(t *testing.T) {
 		t.Fatalf("expected 500 on generic error, got %d", resp.StatusCode)
 	}
 }
+
+func TestServer_GracefulShutdown_ContextCancellation(t *testing.T) {
+	addr := freeAddr(t)
+	srv := webhookhttp.New(webhookhttp.Config{Addr: addr}).
+		Handle("POST", "/webhook", func(ctx context.Context, d webhookhttp.Delivery) error {
+			return nil
+		})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.ListenAndServe(ctx) }()
+	waitListen(t, addr)
+
+	// Cancel before any traffic. Server should shut down cleanly.
+	cancel()
+	select {
+	case err := <-errCh:
+		if err != nil && err != http.ErrServerClosed {
+			t.Fatalf("ListenAndServe returned %v after cancel", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("server did not shut down within 2s of context cancellation")
+	}
+
+	// Listener must be released — a follow-up bind on the same addr should succeed.
+	l, err := net.Listen("tcp", addr)
+	if err != nil {
+		t.Fatalf("addr not released after shutdown: %v", err)
+	}
+	_ = l.Close()
+}
