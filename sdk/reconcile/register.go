@@ -303,8 +303,30 @@ func makeDestroyFn[D, O any](r Reconciler[D, O], ec *emitContext) func(context.C
 				return nil, fmt.Errorf("reconcile.Destroy: parse ref: %w", err)
 			}
 		}
-		if err := r.Destroy(ctx, in.Ref); err != nil {
-			return nil, err
+
+		// v0.8.0: prefer DestroyWithDesired[D] when the reconciler
+		// implements it. That path receives the FULL parsed desired
+		// payload — including the reserved bridge keys stashed by
+		// adapter ExecuteHandlers (__instance_credentials etc) — so
+		// destroy can resolve auth context the same way ensure_* and
+		// observe_* do. Adapters that don't need credentials in
+		// destroy keep the legacy Destroy(ctx, ref) signature and
+		// continue working unchanged. See types.go DestroyWithDesired
+		// docstring for the full rationale.
+		if dwd, ok := any(r).(DestroyWithDesired[D]); ok {
+			var desired D
+			if len(env.Input) > 0 {
+				if err := json.Unmarshal(env.Input, &desired); err != nil {
+					return nil, fmt.Errorf("reconcile.DestroyWithDesired: parse desired: %w", err)
+				}
+			}
+			if err := dwd.DestroyWithDesired(ctx, in.Ref, desired); err != nil {
+				return nil, err
+			}
+		} else {
+			if err := r.Destroy(ctx, in.Ref); err != nil {
+				return nil, err
+			}
 		}
 		// Observed for destroy is a minimal envelope — provider may
 		// not return any state once the resource is gone.

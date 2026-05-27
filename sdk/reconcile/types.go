@@ -30,6 +30,67 @@ type Reconciler[D any, O any] interface {
 	Destroy(ctx context.Context, ref string) error
 }
 
+// DestroyWithDesired is the optional sister interface for reconcilers
+// that need access to the full desired payload (not just the ref
+// string) during destruction.
+//
+// # Motivation
+//
+// The base Reconciler[D, O].Destroy(ctx, ref) signature is the right
+// shape for the canonical convention — destroy is identified by a
+// stable provider-side ref. However, the SDK's controllers/message
+// bridge (in every adapter pinning SDK v0.7.0+) stashes per-request
+// integration context under reserved input keys
+// (__instance_credentials / __instance_config / __request_auth) so
+// the dispatched reconciler can rebuild auth + provider URLs
+// per-call. Those reserved keys live in the parsed desired payload —
+// NOT on the ref string. A reconciler that only sees the ref cannot
+// resolve auth, breaking destroy_* operations for any adapter that
+// loads credentials per-request (the dominant pattern across the
+// ecosystem).
+//
+// DestroyWithDesired closes this gap: when a Reconciler[D, O]
+// ALSO implements DestroyWithDesired[D], the SDK's dispatch path
+// prefers DestroyWithDesired and passes the FULL parsed desired
+// payload — letting the reconciler extract the reserved bridge keys
+// and forward them through its `Execute`-equivalent dispatch helper.
+//
+// # Backward compatibility
+//
+// This interface is OPT-IN. Reconcilers that don't need credentials
+// in destroy may continue to implement only the base Destroy(ctx, ref)
+// method — v0.7.0 behavior is preserved verbatim. SDK v0.8.0 does NOT
+// require any change to adapters that don't need this.
+//
+// # Wire shape
+//
+// The desired payload arrives unmarshalled from the same env.Input
+// bytes the legacy Destroy reads `{"ref": "..."}` from. It is the
+// same shape Ensure receives — including the reserved bridge keys
+// the controllers/message bridge stashes per
+// INTEGRATION_CONTRACT.md §5.b (op-echo cycle).
+//
+// # Example
+//
+//	type repoReconciler struct{ dispatch dispatchFn; instanceID string }
+//
+//	// Legacy — kept for backward compat / direct callers.
+//	func (r *repoReconciler) Destroy(ctx context.Context, ref string) error {
+//	    _, err := r.dispatch(OperationDestroyRepository, r.instanceID, payload{"ref": ref})
+//	    return err
+//	}
+//
+//	// Env-aware — preferred by SDK v0.8.0 dispatch.
+//	func (r *repoReconciler) DestroyWithDesired(ctx context.Context, ref string, desired payload) error {
+//	    if desired == nil { desired = payload{} }
+//	    desired["ref"] = ref
+//	    _, err := r.dispatch(OperationDestroyRepository, instanceFromPayload(desired, r.instanceID), desired)
+//	    return err
+//	}
+type DestroyWithDesired[D any] interface {
+	DestroyWithDesired(ctx context.Context, ref string, desired D) error
+}
+
 // Discoverer is the optional sister interface for resources the
 // adapter should walk on the provider side — finding resources
 // that exist in the provider's account/namespace including
