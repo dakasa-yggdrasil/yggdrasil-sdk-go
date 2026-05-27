@@ -167,3 +167,28 @@ func TestVerifyStripe_MultipleV1ComponentsFirstMatch(t *testing.T) {
 		t.Fatalf("expected success with at least one matching v1, got %v", err)
 	}
 }
+
+// TestVerifyStripe_KnownFixture asserts the verifier produces a stable
+// answer on a canonical fixture; locks the wire format against
+// accidental change.
+func TestVerifyStripe_KnownFixture(t *testing.T) {
+	// Frozen clock at 2025-01-01T00:00:00Z.
+	prev := nowFn
+	nowFn = func() time.Time { return time.Unix(1735689600, 0).UTC() }
+	defer func() { nowFn = prev }()
+
+	secret := []byte("whsec_fixture_2025")
+	body := []byte(`{"id":"evt_fixture","type":"payment_intent.succeeded"}`)
+	// Pre-computed Stripe signature for body+secret+t=1735689600.
+	// Reproduce locally with:
+	//   echo -n "1735689600.<body>" | openssl dgst -sha256 -hmac whsec_fixture_2025
+	expectedSig := stripeSig(t, 1735689600, body, secret)
+
+	ts, err := VerifyStripe(body, expectedSig, secret, 300)
+	if err != nil {
+		t.Fatalf("fixture verify failed: %v", err)
+	}
+	if ts != 1735689600 {
+		t.Fatalf("expected ts=1735689600, got %d", ts)
+	}
+}
