@@ -4,6 +4,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -35,3 +36,39 @@ func TestVerifyStripe_ValidSignature(t *testing.T) {
 		t.Fatalf("expected ts=%d, got %d", now, ts)
 	}
 }
+
+func TestVerifyStripe_TamperedBodyRejected(t *testing.T) {
+	secret := []byte("whsec_test_abcdef")
+	body := []byte(`{"id":"evt_1","type":"payment_intent.succeeded"}`)
+	now := time.Now().Unix()
+	header := stripeSig(t, now, body, secret)
+
+	tampered := []byte(`{"id":"evt_1","type":"payment_intent.succeeded","amount":999}`)
+	_, err := VerifyStripe(tampered, header, secret, 300)
+	if err == nil {
+		t.Fatal("expected error for tampered body, got nil")
+	}
+	if !errorsIs(err, ErrSignatureMismatch) {
+		t.Fatalf("expected ErrSignatureMismatch, got %v", err)
+	}
+}
+
+func TestVerifyStripe_TamperedSignatureRejected(t *testing.T) {
+	secret := []byte("whsec_test_abcdef")
+	body := []byte(`{"id":"evt_1"}`)
+	now := time.Now().Unix()
+	// Flip one hex char in the v1 component.
+	header := stripeSig(t, now, body, secret)
+	flipped := header[:len(header)-1] + "0"
+	if flipped[len(flipped)-1] == header[len(header)-1] {
+		flipped = header[:len(header)-1] + "1"
+	}
+
+	_, err := VerifyStripe(body, flipped, secret, 300)
+	if !errorsIs(err, ErrSignatureMismatch) {
+		t.Fatalf("expected ErrSignatureMismatch, got %v", err)
+	}
+}
+
+// errorsIs is a local alias so the test file imports stay minimal.
+func errorsIs(err, target error) bool { return errors.Is(err, target) }
