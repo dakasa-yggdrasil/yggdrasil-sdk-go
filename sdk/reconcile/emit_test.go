@@ -269,3 +269,85 @@ func TestRegisterReconciler_WithEmitter_IdempotencyKeyFromRequest(t *testing.T) 
 		t.Fatalf("expected Idempotency carried forward; got %q", emitted[0].Idempotency)
 	}
 }
+
+// TestRegisterReconciler_WithEmitter_IdempotencyKeySynthesizedWhenAbsent
+// covers v0.8.2: when the inbound execute envelope omits the
+// idempotency field (the realistic shape — adapter-initiated destroys
+// have no caller-supplied dedup key), the SDK MUST synthesize one
+// rather than emit with an empty Idempotency.
+//
+// Yggdrasil-core's validator at controllers/httpapi/events_publish.go:247
+// rejects mutation events with empty idempotency (HTTP 400). The
+// synthesized key MUST be deterministic-enough that an at-least-once
+// retry within the same nanosecond hashes identically (the downstream
+// event_log dedups on it).
+func TestRegisterReconciler_WithEmitter_IdempotencyKeySynthesizedWhenAbsent(t *testing.T) {
+	em := &captureEmitter{}
+	a := adapter.New(adapter.Config{Provider: "test", IntegrationType: "test"})
+	rec := &fakeUserReconciler{users: map[string]userObserved{}}
+	reconcile.RegisterReconciler[userDesired, userObserved](a, "user", "users", rec,
+		reconcile.WithEmitter(em),
+		reconcile.WithProvider("stripe"),
+	)
+
+	// Realistic destroy envelope: no idempotency key, just the ref.
+	body, _ := json.Marshal(map[string]any{
+		"operation": "destroy_user",
+		"input": map[string]any{
+			"ref": "u_alice",
+		},
+	})
+	if _, _, err := reconcile.ExecuteForTest(context.Background(), a, newDelivery(body)); err != nil {
+		t.Fatalf("dispatch err: %v", err)
+	}
+	emitted := em.snapshot()
+	if len(emitted) != 1 {
+		t.Fatalf("expected 1 emit, got %d", len(emitted))
+	}
+	got := emitted[0].Idempotency
+	if got == "" {
+		t.Fatalf("Idempotency was empty; the SDK MUST synthesize one when the envelope omits it (yggdrasil-core rejects empty)")
+	}
+	// Shape sanity: <provider>.<resource>.<verb>.<resource_id>.<hash>
+	wantPrefix := "stripe.user.destroyed.u_alice."
+	if !strings.HasPrefix(got, wantPrefix) {
+		t.Fatalf("Idempotency %q does not start with %q (provider.resource.verb.resource_id.hash)", got, wantPrefix)
+	}
+	if len(got) <= len(wantPrefix) {
+		t.Fatalf("Idempotency %q has no hash suffix", got)
+	}
+}
+
+// TestRegisterReconciler_WithEmitter_IdempotencyKeySynthesizedForEnsure
+// mirrors the destroy synthesis test for the ensure path so the fix
+// covers BOTH verbs (the bug was reported on destroy because the
+// adapter-initiated path is more common there, but the ensure path
+// is equally affected when callers don't pass idempotency).
+func TestRegisterReconciler_WithEmitter_IdempotencyKeySynthesizedForEnsure(t *testing.T) {
+	em := &captureEmitter{}
+	a := adapter.New(adapter.Config{Provider: "test", IntegrationType: "test"})
+	rec := &fakeUserReconciler{users: map[string]userObserved{}}
+	reconcile.RegisterReconciler[userDesired, userObserved](a, "user", "users", rec,
+		reconcile.WithEmitter(em),
+		reconcile.WithProvider("stripe"),
+	)
+	body, _ := json.Marshal(map[string]any{
+		"operation": "ensure_user",
+		"input": map[string]any{
+			"login": "alice", "email": "a@x", "role": "Viewer",
+		},
+	})
+	if _, _, err := reconcile.ExecuteForTest(context.Background(), a, newDelivery(body)); err != nil {
+		t.Fatalf("dispatch err: %v", err)
+	}
+	emitted := em.snapshot()
+	if len(emitted) != 1 {
+		t.Fatalf("expected 1 emit, got %d", len(emitted))
+	}
+	if emitted[0].Idempotency == "" {
+		t.Fatalf("ensure path also requires synthesized idempotency key when caller omits one")
+	}
+	if !strings.HasPrefix(emitted[0].Idempotency, "stripe.user.ensured.") {
+		t.Fatalf("Idempotency %q lacks expected ensured-verb prefix", emitted[0].Idempotency)
+	}
+}

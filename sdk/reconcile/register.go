@@ -2,11 +2,14 @@ package reconcile
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"reflect"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/dakasa-yggdrasil/yggdrasil-sdk-go/adapter"
 	"github.com/dakasa-yggdrasil/yggdrasil-sdk-go/rpc"
@@ -132,6 +135,26 @@ func (ec *emitContext) emit(ctx context.Context, env executeRequest, verb events
 		return
 	}
 	provider := ec.effectiveProvider(env)
+	idempotency := env.Idempotency
+	if idempotency == "" {
+		// v0.8.2: synthesize an idempotency key when the inbound envelope
+		// didn't carry one. Yggdrasil-core requires `idempotency` for
+		// every mutation event (validator in
+		// controllers/httpapi/events_publish.go:247). Without this
+		// synthesis, every adapter-initiated emission (i.e., everything
+		// not driven by a caller that pre-stamped an idempotency key)
+		// fails with HTTP 400 and the event_log row never lands.
+		//
+		// Synthesized shape:
+		//   <provider>.<resource>.<verb>.<resource_id>.<timestamp_nano_hash>
+		//
+		// resource_id is included so consecutive operations on different
+		// resources don't collide. The timestamp + sha256 prefix carries
+		// the natural at-least-once safety net (a retried emit within
+		// the same nanosecond still hashes identically and dedups
+		// downstream).
+		idempotency = synthesizeIdempotencyKey(provider, ec.resource, verb, resourceID)
+	}
 	ev := events.MutationEvent{
 		EventType:   events.BuildEventType(provider, ec.resource, verb),
 		Provider:    provider,
@@ -139,12 +162,32 @@ func (ec *emitContext) emit(ctx context.Context, env executeRequest, verb events
 		Verb:        verb,
 		ResourceID:  resourceID,
 		InstanceID:  ec.effectiveInstanceID(env),
-		Idempotency: env.Idempotency,
+		Idempotency: idempotency,
 		Observed:    observed,
 	}
 	if err := ec.emitter.Emit(ctx, ev); err != nil {
 		ec.warn("reconcile: emit %q failed (best-effort, not blocking): %v", ev.EventType, err)
 	}
+}
+
+// synthesizeIdempotencyKey builds a deterministic-within-a-nanosecond
+// dedup key when the inbound execute envelope didn't supply one.
+//
+// Adapters in tree that route through reconcile.Dispatch typically have
+// no caller-supplied idempotency on the destroy path — destroy_*
+// payloads carry the resource ref and (optionally) credentials. Without
+// this synthesis, every auto-emitted .destroyed event fails the
+// yggdrasil-core validator at events_publish.go:247.
+//
+// Shape: <provider>.<resource>.<verb>.<resource_id>.<sha256_8_of_unixnano>
+// The sha256 prefix bounds the key length and avoids encoding the
+// raw timestamp (which Yggdrasil would happily store but isn't useful
+// as a dedup signal across replays).
+func synthesizeIdempotencyKey(provider, resource string, verb events.Verb, resourceID string) string {
+	now := time.Now().UTC().UnixNano()
+	h := sha256.Sum256([]byte(fmt.Sprintf("%s|%s|%s|%s|%d", provider, resource, verb, resourceID, now)))
+	hashPrefix := hex.EncodeToString(h[:4]) // 8 hex chars
+	return fmt.Sprintf("%s.%s.%s.%s.%s", provider, resource, verb, resourceID, hashPrefix)
 }
 
 // missingEmitterWarned tracks one-shot WARN logs so backward-compat

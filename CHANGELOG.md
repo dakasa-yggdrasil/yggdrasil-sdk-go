@@ -4,6 +4,47 @@ All notable changes to `yggdrasil-sdk-go` are documented here. The
 format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [v0.8.2] - 2026-05-27
+
+Patch release. Closes the second emission-validation gap surfaced
+during the SDK v0.8.1 follow-up smoke: every `.destroyed` event the
+SDK auto-emitted carried `Idempotency: ""` because the inbound
+adapter execute envelope rarely supplies one — destroy payloads
+typically carry only the resource ref and (optionally) credentials.
+yggdrasil-core's POST /api/v1/events validator requires non-empty
+`idempotency` for every mutation event (per INTEGRATION_CONTRACT
+§6.5 — "the dedup key for safe retries"), so the response was a
+clean `HTTP 400: idempotency is required for mutation events`.
+Combined with v0.8.1's resource_id fix, the §6.5 wire is now whole:
+adapter-initiated destroys land in `event_log` end-to-end without
+any caller-side instrumentation.
+
+### Fixed
+
+- **`sdk/reconcile`** — `emitContext.emit` now synthesizes an
+  idempotency key when `env.Idempotency == ""`. The synthesized key
+  follows the deterministic shape
+  `<provider>.<resource>.<verb>.<resource_id>.<sha256_8_of_unixnano>`,
+  which preserves dedup safety: a retried emit within the same
+  nanosecond hashes identically, so downstream `event_log`
+  deduplicates on it. Caller-supplied keys (`env.Idempotency != ""`)
+  flow through unchanged — backward-compat with v0.8.1.
+- New unit tests in `sdk/reconcile/emit_test.go`:
+  - `TestRegisterReconciler_WithEmitter_IdempotencyKeySynthesizedWhenAbsent`
+    (destroy path)
+  - `TestRegisterReconciler_WithEmitter_IdempotencyKeySynthesizedForEnsure`
+    (ensure path — equally affected when callers omit the key)
+- The existing `TestRegisterReconciler_WithEmitter_IdempotencyKeyFromRequest`
+  still asserts the caller-supplied key flows through verbatim.
+
+### Migration notes
+
+No adapter code change required. Bumping the SDK pin from `v0.8.1` →
+`v0.8.2` is sufficient — the synthesis happens inside the SDK on
+auto-emission. Adapters that already plumbed an idempotency key
+through their custom request shaper continue to win precedence; the
+fallback only fires when the inbound envelope is empty.
+
 ## [v0.8.1] - 2026-05-27
 
 Patch release. Closes a destroy emission gap discovered during the
