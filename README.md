@@ -205,3 +205,46 @@ Emission is best-effort: an emit failure logs WARN but does NOT
 fail the capability call. Local dev / no-bus environments use
 `&events.NoopEmitter{}` which WARNs on each call so suppression
 is visible.
+
+## v0.7.0 — `reconcile.Dispatch` production wiring
+
+The dispatch table built up by `RegisterReconciler` is now a
+production-grade public API. Adapters wire `reconcile.Dispatch` into
+their `controllers/message/execute.go::ExecuteHandler` so every
+inbound operator request flows through the SDK — activating §6.5
+auto-emission for production traffic, not just tests.
+
+```go
+// In main.go:
+a := adapter.New(adapter.Config{Provider: "stripe", ...})
+reconcile.RegisterReconciler(a, "customer", "customers", customerR,
+    reconcile.WithEmitter(emitter),
+    reconcile.WithProvider("stripe"),
+    reconcile.WithInstanceID(instanceID),
+)
+// ...register all resources...
+
+// In controllers/message/execute.go:
+func ExecuteHandler(...) Handler {
+    return func(ctx context.Context, d rpc.Delivery) ([]byte, string, error) {
+        // ...auth, logging, capability normalization...
+        return reconcile.Dispatch(ctx, a, d)  // ← SDK auto-emits here
+    }
+}
+```
+
+`adapter.Adapter.Register` is last-write-wins. `RegisterReconciler`
+auto-installs an `execute` handler on the first call per adapter; a
+subsequent `a.Register("execute", legacyHandler)` clobbers the
+SDK-installed handler and silently disables §6.5 emission. Supported
+patterns:
+
+1. Register a single custom execute handler that internally calls
+   `reconcile.Dispatch` (recommended — preserves auth / logging /
+   capability normalization while delegating routing + emission to
+   the SDK).
+2. Skip `a.Register("execute", ...)` entirely and rely on the
+   auto-installed handler.
+
+`reconcile.ExecuteForTest` is now a deprecated alias delegating to
+`reconcile.Dispatch`. Removed at `v1.0.0`.

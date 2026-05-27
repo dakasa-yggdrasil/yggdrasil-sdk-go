@@ -48,4 +48,38 @@
 // Backward compatibility: v0.5.0 RegisterReconciler calls without
 // WithEmitter keep working. A single WARN per adapter at startup
 // points operators at the new option.
+//
+// # Production wiring (v0.7.0+)
+//
+// reconcile.Dispatch is the public entry point adapters wire into
+// their controllers/message ExecuteHandler so production traffic
+// flows through the SDK dispatch path — activating §6.5 auto-emission
+// for every operator request, not just tests:
+//
+//	// In main.go:
+//	a := adapter.New(adapter.Config{Provider: "stripe", ...})
+//	reconcile.RegisterReconciler(a, "customer", "customers", customerR,
+//	    reconcile.WithEmitter(emitter),
+//	    reconcile.WithProvider("stripe"),
+//	    reconcile.WithInstanceID(instanceID),
+//	)
+//
+//	// In controllers/message/execute.go::ExecuteHandler:
+//	func ExecuteHandler(...) Handler {
+//	    return func(ctx context.Context, d rpc.Delivery) ([]byte, string, error) {
+//	        // ...auth, logging, capability normalize...
+//	        return reconcile.Dispatch(ctx, a, d)  // ← SDK auto-emits here
+//	    }
+//	}
+//
+// adapter.Adapter.Register is last-write-wins. RegisterReconciler
+// auto-installs an "execute" handler on first call per adapter; any
+// subsequent a.Register("execute", legacyHandler) call clobbers the
+// SDK's handler and silently disables §6.5 emission. The supported
+// patterns are: (1) register a single custom execute handler that
+// internally calls reconcile.Dispatch; or (2) skip a.Register("execute")
+// entirely and rely on the auto-installed handler.
+//
+// ExecuteForTest remains as a deprecated alias delegating to Dispatch
+// for one minor cycle; removed at v1.0.0.
 package reconcile

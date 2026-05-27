@@ -4,6 +4,65 @@ All notable changes to `yggdrasil-sdk-go` are documented here. The
 format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [v0.7.0] - 2026-05-27
+
+Promotes the per-adapter reconcile dispatch table to a public
+production API. Adapter `ExecuteHandler`s now delegate operation
+routing to `reconcile.Dispatch`, activating INTEGRATION_CONTRACT.md
+§6.5 auto-emission for every operator request — not just tests.
+
+### Added
+
+- **`sdk/reconcile`** — new public function:
+  - `Dispatch(ctx, *adapter.Adapter, rpc.Delivery) ([]byte, string, error)`
+    — routes an inbound execute envelope through the adapter's
+    reconcile dispatch table, invoking the registered Reconciler for
+    the requested operation and emitting §6.5 mutation events on
+    success when an emitter is wired (via `WithEmitter` at
+    registration time).
+  - Returns a clear error when the adapter has no registered
+    Reconciler or the requested operation is not in the dispatch
+    table — the error message names the missing op so callers can
+    diagnose typos / wrong rename.
+  - Package doc gains a "Production wiring (v0.7.0+)" section
+    documenting the recommended adapter wiring pattern:
+    `controllers/message/execute.go::ExecuteHandler` returns
+    `reconcile.Dispatch(ctx, a, d)` after auth/log/normalize.
+
+### Behavior notes
+
+- **`adapter.Register` is last-write-wins** (see
+  `adapter/adapter.go::Register` — "Duplicate registrations overwrite;
+  this is deliberate so that tests can swap a mock handler in").
+  `RegisterReconciler` auto-installs an `execute` handler the FIRST
+  time it runs per adapter; a subsequent
+  `a.Register("execute", legacyHandler)` call clobbers the SDK's
+  handler and silently disables §6.5 emission.
+- Supported wiring patterns: (1) register a single custom execute
+  handler that internally calls `reconcile.Dispatch`; or (2) skip
+  `a.Register("execute", ...)` entirely and rely on the SDK's
+  auto-installed handler.
+
+### Deprecated
+
+- **`reconcile.ExecuteForTest`** — kept as a thin alias delegating to
+  `reconcile.Dispatch` with identical semantics. Will be removed at
+  `v1.0.0`. Migration is a single-line rename
+  (`reconcile.ExecuteForTest` → `reconcile.Dispatch`).
+
+### Compat
+
+- Purely additive at the binary level. v0.6.x adapters keep building
+  unchanged — `ExecuteForTest` still works.
+- The `WithLegacyNames` shim deadline stays at v0.7.0 conceptually,
+  but the shim itself is preserved in this release; adapters
+  finishing the convention rollout retain the shim warning for one
+  more cycle.
+
+### Dependencies
+
+- No new external dependencies. Uses stdlib only.
+
 ## [v0.6.0] - 2026-05-27
 
 Auto-emission of mutation events. The §6.5 Golden Rule of the

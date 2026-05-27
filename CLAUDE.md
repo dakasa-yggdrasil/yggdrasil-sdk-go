@@ -139,10 +139,26 @@ protocol/               # (currently empty)
     `ID`/`Id` field, falling back to top-level `id` in the marshalled
     JSON. Empty string when neither resolves.
   - **Zero new external deps** — stdlib only.
+- **v0.7.0 — `reconcile.Dispatch` production API** (CHANGELOG entry 2026-05-27):
+  - `sdk/reconcile.Dispatch(ctx, *adapter.Adapter, rpc.Delivery)`
+    promotes the per-adapter dispatch table to a public production
+    entry point. Adapter `ExecuteHandler`s now delegate operation
+    routing to the SDK so production traffic activates §6.5
+    auto-emission (not just tests).
+  - `reconcile.ExecuteForTest` is now a deprecated alias delegating
+    to `Dispatch`. Removed at v1.0.0.
+  - **Gotcha documented**: `adapter.Adapter.Register` is
+    last-write-wins. RegisterReconciler auto-installs an `execute`
+    handler on first call per adapter; a subsequent
+    `a.Register("execute", legacyHandler)` clobbers the SDK handler
+    and silently disables §6.5 emission. Supported patterns: a
+    single custom execute handler internally calling
+    `reconcile.Dispatch`, OR skip `a.Register("execute")` entirely.
 
 ## Recent commits (entire log — small repo)
 
 ```
+<v0.7.0> sdk/reconcile: public Dispatch API + deprecate ExecuteForTest
 <v0.6.0> sdk/events: MutationEvent + Emitter + HTTPEmitter + NoopEmitter
          sdk/reconcile: WithEmitter auto-emits on Ensure/Destroy success
 <v0.5.0> sdk/reconcile: Reconciler[D,O] + RegisterReconciler + WithLegacyNames shim
