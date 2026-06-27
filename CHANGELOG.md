@@ -4,6 +4,31 @@ All notable changes to `yggdrasil-sdk-go` are documented here. The
 format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [v0.9.0] - 2026-06-27
+
+Additive minor release. Introduces the **verified-caller** contract for
+caller-scoped surface reads, closing the spoofable-`collaborator_id`
+PII hole in self-service ("Meu RH") views.
+
+### Added
+
+- **`surface.InputVerifiedCallerID`** (`= "verified_caller_id"`) and
+  **`surface.VerifiedCallerID(input)`** — the canonical top-level
+  `on_surface_query` Input key carrying the SERVER-VERIFIED caller
+  collaborator id that yggdrasil-core derives from the validated
+  session, plus a tolerant extractor. Core is the only writer; adapters
+  that scope a read by the human caller MUST read this field and MUST
+  NOT trust a client-supplied id nested under `Input["params"]`.
+
+### Compatibility
+
+- Purely additive: two new exported identifiers in `surface`, no wire
+  type changed, no existing API touched. Adapters that do not read the
+  field ignore it; lenient input decoding (no
+  `json.DisallowUnknownFields` anywhere in the fleet) means the extra
+  Input key can never break decoding. All v0.8.x adapters keep building
+  without changes.
+
 ## [v0.8.5] - 2026-05-27
 
 Patch release. Polishes the v0.8.4 numeric coercion: integer-valued
