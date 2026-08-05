@@ -1,0 +1,118 @@
+name: Docs freshness
+
+# Keeps the repo's docs honest without a human having to remember to. On every PR:
+#   1. A cheap bash gate decides if the docs might be stale: real code changed
+#      AND the author's agent did NOT already bump docs/AI_DOCS_FRESHNESS.md.
+#   2. Only then does an AI read the PR diff, reconcile the docs the change made
+#      stale, commit ONLY the doc files back to the PR branch, and bump the stamp.
+#
+# The stamp bump doubles as a loop breaker: if the AI's push re-triggers this
+# workflow, the gate sees the stamp bumped and skips. (GitHub also does not
+# re-trigger pull_request workflows on pushes made with GITHUB_TOKEN, so the
+# common case never loops at all.) See CLAUDE.md / AGENTS.md ->
+# "Docs freshness (AI-reconciled, stamp-gated)".
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+  pull-requests: write
+  id-token: write
+
+concurrency:
+  group: docs-freshness-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    # Never on forks: no secrets there, and we must not push to a fork's branch.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.ref }}
+
+      - name: Decide whether the docs need an AI pass
+        id: gate
+        env:
+          BASE: ${{ github.event.pull_request.base.ref }}
+          # Secret-optional: without the token the AI step stays dormant (this job
+          # stays green) and activates automatically once CLAUDE_CODE_OAUTH_TOKEN
+          # exists (ideally an org secret covering every repo).
+          HAS_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }}
+        run: |
+          set -euo pipefail
+          if [ "$HAS_TOKEN" != "true" ]; then
+            echo "no CLAUDE_CODE_OAUTH_TOKEN in this repo yet - AI reconcile dormant"
+            echo "run_ai=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          git fetch --quiet origin "$BASE"
+          changed=$(git diff --name-only "origin/$BASE"...HEAD)
+          echo "changed files:"; printf '%s\n' "$changed" | sed 's/^/  /'
+          # Economy path 1: the author's agent already bumped the stamp -> trust it.
+          if printf '%s\n' "$changed" | grep -qx 'docs/AI_DOCS_FRESHNESS.md'; then
+            echo "stamp bumped by the author's agent - skipping the AI (economy path)"
+            echo "run_ai=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          # Economy path 2: only real code can stale the docs. A docs-only, CI-only,
+          # or markdown-only PR does not need the AI.
+          if printf '%s\n' "$changed" | grep -qvE '^(docs/|\.github/|.*\.md$)'; then
+            echo "code changed and stamp not bumped - running the AI reconcile"
+            echo "run_ai=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "no code changed outside docs - skipping"
+            echo "run_ai=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Reconcile docs with the code (AI) and commit to the PR
+        if: steps.gate.outputs.run_ai == 'true'
+        uses: anthropics/claude-code-action@v1
+        # PR fields reach the AI's shell only through env vars, never inlined into
+        # the prompt: a branch name is attacker-controllable and must never be
+        # expanded at workflow-parse time into a string the AI later runs in bash.
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: '--allowedTools "Bash(git*),Edit,Read,Grep,Glob"'
+          prompt: |
+            You are the docs-freshness reconciler for this repository, running in
+            CI on pull request #$PR_NUMBER.
+
+            The PR base branch, head branch, and number are in the environment as
+            $PR_BASE_REF, $PR_HEAD_REF, and $PR_NUMBER. Always reference them as
+            those shell variables (quoted); never paste a literal branch name.
+
+            Goal: make the docs describe what the code in THIS PR now does, and
+            nothing more. Never touch source code.
+
+            Steps:
+            1. Read the PR diff: git diff "origin/$PR_BASE_REF"...HEAD
+            2. For each change, find the docs it makes stale - under docs/
+               (architecture, ADRs, events-and-queues, the service map), the
+               README, and any doc-comment the diff did not already update. Update
+               them to match the new behavior.
+            3. If NOTHING is stale, make no changes, write "docs already fresh" as
+               your summary, and stop. Do not manufacture edits to look busy.
+            4. If you changed docs, set verified_at_commit in
+               docs/AI_DOCS_FRESHNESS.md to the current HEAD sha and refresh its
+               date and note, then commit ONLY the doc files and push:
+                  git add docs/AI_DOCS_FRESHNESS.md <the doc files you changed>
+                  git commit -m "docs: reconcile with the code in this PR"
+                  git push origin "HEAD:$PR_HEAD_REF"
+               Never use git add -A. Never stage source, tests, or config.
+
+            Hard rules:
+            - Never use the em dash character anywhere you write.
+            - Never weaken, soften, or delete a doc to make it agree with a bug.
+              A doc describes correct intended behavior; if the code looks wrong,
+              leave the doc as it is and say so in your summary. Do not "fix" the
+              doc to match broken code.
+            - You may update prose docs (ADRs, rationale) for accuracy, but never
+              invent a decision that was not actually made.
