@@ -8,7 +8,7 @@ right method and — when an emitter is wired — POSTs a `MutationEvent` to
 
 Back to the [README](../README.md) · [USAGE](USAGE.md) · [PACKAGES](PACKAGES.md).
 
-> Verified against `sdk/reconcile/*.go` and `sdk/events/*.go` at `v0.8.5`.
+> Verified against `sdk/reconcile/*.go` and `sdk/events/*.go` at `v0.9.1`.
 
 ---
 

@@ -8,7 +8,7 @@ reconcile/auto-emission helpers so plugin authors write business logic, not plum
 
 [![Go](https://img.shields.io/badge/go-1.25-00ADD8.svg)](go.mod)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-[![Release](https://img.shields.io/badge/release-v0.8.5-informational.svg)](CHANGELOG.md)
+[![Release](https://img.shields.io/badge/release-v0.9.1-informational.svg)](CHANGELOG.md)
 
 Library · [Usage](docs/USAGE.md) · [Packages](docs/PACKAGES.md) · [Reconcile & Events](docs/RECONCILE-AND-EVENTS.md) · [Development](docs/DEVELOPMENT.md)
 
@@ -29,7 +29,7 @@ the [Integration Contract](https://github.com/dakasa-yggdrasil/yggdrasil-core)
 §6.5 Golden Rule on the adapter's behalf.
 
 It ships **no binary** — no Dockerfile, no CI workflow. Releases are git tags
-(`v0.8.5` today); consumers pin via `go.mod`.
+(`v0.9.1` today); consumers pin via `go.mod`.
 
 > Part of **Yggdrasil** — the self-hosted control plane for declarative
 > workflows + integrations. This SDK is the build-time dependency that makes an
@@ -76,7 +76,7 @@ Full per-package reference with signatures and snippets: **[docs/PACKAGES.md](do
 ## Install
 
 ```sh
-go get github.com/dakasa-yggdrasil/yggdrasil-sdk-go@v0.8.5
+go get github.com/dakasa-yggdrasil/yggdrasil-sdk-go@v0.9.1
 ```
 
 Requires **Go 1.25+**. Dependencies: `rabbitmq/amqp091-go`, `google/uuid`,
@@ -151,9 +151,26 @@ when set, falling back to `Config.Provider` otherwise. Get this wrong and the
 adapter consumes from a bare queue name nobody publishes to — it sits idle while
 requests pile up on the real queue.
 
+Fixed queues are a deployment prerequisite. Before an AMQP adapter starts, the
+platform must provision its `describe` and `execute` queues as durable quorum
+queues (plus any retry/DLX companions). The SDK checks existence with passive
+queue declaration and never creates fixed queues. A missing or inaccessible
+queue therefore fails startup instead of silently creating a classic queue with
+broker defaults. RabbitMQ ignores durability, auto-delete, and arguments on a
+passive declaration, so the deployment must verify `durable=true`,
+`auto_delete=false`, and `x-queue-type=quorum` through the management API before
+starting the adapter. If access or existence becomes permanently invalid after
+startup, the subscription reports a terminal error to `Adapter.Run`; production
+adapter mains return fatally, taking readiness down instead of staying green
+with zero consumers. The SDK does not control application readiness during the
+initial dial; deployments whose health server starts before `Run` must gate on
+RabbitMQ consumer counts (and an RPC round trip), not pod readiness alone.
+
 `ListenAMQP` also wires a **reconnect watchdog**: after the initial retrying dial
 succeeds, a background goroutine re-dials on broker-side disconnects (rabbit
 restart, network blip), and each subscription rebinds on its next setup retry.
+Publish can also initiate that reconnect without deadlocking the shared publish
+channel. Transient connection failures retain their capped backoff.
 Without it, a single rabbit restart used to strand every adapter pod until the
 kubelet restarted it — the bug this SDK was bumped to v0.3.0 to fix. Details in
 [docs/PACKAGES.md#rpcamqp](docs/PACKAGES.md#rpcamqp).
@@ -217,7 +234,7 @@ Build, test, tagging/release flow, and the compatibility policy are in
 with `yggdrasil-core` is mandatory: a breaking change in `rpc.Envelope`,
 `rpc.Delivery`, or the AMQP queue-naming convention breaks every adapter at its
 next rebuild. The `surface` manifest schema is additive
-(`surface.SchemaVersionCurrent == 1`). Current release: **v0.8.5** (see
+(`surface.SchemaVersionCurrent == 1`). Current release: **v0.9.1** (see
 [CHANGELOG.md](CHANGELOG.md)).
 
 ## Related

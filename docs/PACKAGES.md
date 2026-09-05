@@ -1,7 +1,7 @@
 # Packages — per-package reference
 
 Every signature below was read from the `.go` source in this repo and verified
-against `v0.8.5`. Import path root:
+against `v0.9.1`. Import path root:
 `github.com/dakasa-yggdrasil/yggdrasil-sdk-go`.
 
 Back to the [README](../README.md) · [USAGE](USAGE.md) ·
@@ -101,6 +101,11 @@ type Subscription interface {
     Close() error
 }
 
+type TerminalErrorSubscription interface { // optional asynchronous-failure contract
+    Subscription
+    TerminalErrors() <-chan error
+}
+
 type ConsumerConfig struct {
     Endpoint    string         // queue / route / topic. Required.
     Handler     Handler        // func(ctx, Delivery) error — MUST Ack or Nack.
@@ -181,6 +186,17 @@ queue `yggdrasil.adapter.<owner>.execute`. The prefix exists because
 `yggdrasil-core` publishes to that namespace; without it the adapter sits on a
 queue nobody writes to.
 
+**Fixed topology ownership (v0.9.1).** `Consume` passively requires each fixed
+queue to exist and does not create it. RabbitMQ passive declaration ignores
+durable, auto-delete, exclusive, and arguments; it cannot distinguish classic
+from quorum. Import the canonical platform definitions and verify
+`durable=true`, `auto_delete=false`, and `x-queue-type=quorum` through the
+management API before starting the adapter. Retry queues, TTL and dead-letter
+routing are also platform-owned and are never synthesized by this SDK. A
+permanent 403, 404, 405, or 406 while re-binding is delivered through
+`rpc.TerminalErrorSubscription`; `adapter.Run` returns that error so the process
+cannot remain ready with no consumer.
+
 **Reconnect watchdog — verified behavior (v0.3.0).** A transport with a
 `DialFunc` (which `ListenAMQP` always sets via `SetDialFunc`) spawns **one**
 watchdog goroutine (`watchdogOnce`). It listens for `NotifyClose` on the current
@@ -189,8 +205,10 @@ close), re-attaching its listener to each new connection so it survives any
 number of restarts. Dial failures back off `1s → 30s` (capped). A concurrent
 "reconnect storm" from N subscriptions collapses to a single dial via `dialMu` +
 a check-after-lock. Each subscription independently rebinds on its next
-`setupConsumer` retry (also `1s → 30s` backoff); `QueueDeclare` is idempotent so
-re-declaring is safe. `ListenAMQP`'s **initial** dial retries `1s → 30s` up to 30
+`setupConsumer` retry (also `1s → 30s` backoff); the passive existence check is
+safe to repeat. Publish resolves/reconnects the connection before taking the
+publish-channel mutex, avoiding a self-deadlock when it wins the recovery race.
+`ListenAMQP`'s **initial** dial retries `1s → 30s` up to 30
 attempts (~5 min) so a pod that boots before rabbit doesn't CrashLoop.
 
 > `New(conn)` (no DialFunc) has **no** connection-level reconnect — fine for

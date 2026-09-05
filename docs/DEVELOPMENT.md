@@ -40,8 +40,14 @@ go vet  ./...
 > ```
 
 All ten buildable packages have tests (`rpc` is the only one with no test files —
-it's pure type/contract definitions). The AMQP reconnect behavior is covered by
-`rpc/amqp/amqp_reconnect_test.go` without a live broker.
+it's pure type/contract definitions). Deterministic unit tests cover terminal
+topology classification, retry-vs-terminal behavior, propagation through
+`Adapter.Run`, and the publish reconnect lock order without a broker. The
+end-to-end missing/classic/quorum/rebind matrix (including the documented
+passive-check limitation for classic queues) in
+`rpc/amqp/amqp_reconnect_test.go` requires RabbitMQ and skips when
+`YGGDRASIL_TEST_AMQP_URL` (default `localhost:5673`) is unavailable; run that
+matrix against a real broker before publishing an AMQP transport release.
 
 ---
 
@@ -79,18 +85,18 @@ Releases are plain semver git tags — no build artifact, no publish step.
 ```sh
 # 1. land the change on the default branch with an updated CHANGELOG.md entry
 # 2. tag and push
-git tag v0.8.6
-git push origin v0.8.6
+git tag v0.9.2
+git push origin v0.9.2
 ```
 
 Consumers then bump:
 
 ```sh
-go get github.com/dakasa-yggdrasil/yggdrasil-sdk-go@v0.8.6
+go get github.com/dakasa-yggdrasil/yggdrasil-sdk-go@v0.9.2
 go mod tidy
 ```
 
-Existing tags: `v0.1.0 … v0.8.5` (current). Keep `CHANGELOG.md` as the source of
+Existing tags: `v0.1.0 … v0.9.1` (current). Keep `CHANGELOG.md` as the source of
 truth for what each tag changed — it follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and is the version map
 this doc set defers to.
@@ -110,6 +116,8 @@ this doc set defers to.
 | v0.8.3 | ensure-path `resource_id` inference (`<resource>_id`, composite) | `inferResourceID` |
 | v0.8.4 | numeric `id` coercion + GitHub `full_name` rung | `coerceToNonEmptyString` |
 | v0.8.5 | integer-valued floats render as integers, not `1.2e+09` | `coerceToNonEmptyString` |
+| v0.9.0 | verified-caller contract for caller-scoped surface reads | `surface/caller.go` |
+| v0.9.1 | non-mutating existence gate for predeclared fixed queues | `rpc/amqp/amqp.go` (`requireFixedConsumerQueue`) |
 
 ---
 

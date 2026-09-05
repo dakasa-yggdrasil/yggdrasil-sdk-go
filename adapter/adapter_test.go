@@ -45,6 +45,54 @@ func TestAdapter_RunRejectsNoHandlers(t *testing.T) {
 	}
 }
 
+// TestAdapter_RunReturnsTerminalSubscriptionError ensures a consumer that
+// becomes permanently invalid after startup tears down the adapter runtime.
+// Without this propagation an AMQP queue deleted or recreated with the wrong
+// type would leave the process healthy-looking with zero consumers.
+func TestAdapter_RunReturnsTerminalSubscriptionError(t *testing.T) {
+	cause := errors.New("fixed queue topology mismatch")
+	terminalErrors := make(chan error, 1)
+	fake := &fakeTransport{
+		handlers:       map[string]rpc.Handler{},
+		done:           make(chan struct{}),
+		terminalErrors: terminalErrors,
+	}
+	a := adapter.New(adapter.Config{Provider: "test"}).
+		Register("execute", func(context.Context, rpc.Delivery) ([]byte, string, error) {
+			return nil, "", nil
+		}).
+		Transport(fake)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runErr := make(chan error, 1)
+	go func() { runErr <- a.Run(ctx) }()
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		fake.mu.Lock()
+		registered := fake.handlers["execute"] != nil
+		fake.mu.Unlock()
+		if registered {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	terminalErrors <- cause
+
+	select {
+	case err := <-runErr:
+		if !errors.Is(err, cause) {
+			t.Fatalf("Run error = %v, want wrapped cause %v", err, cause)
+		}
+		if !strings.Contains(err.Error(), "terminal consumer failure") {
+			t.Fatalf("Run error = %q, want terminal consumer context", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Run did not return after terminal subscription error")
+	}
+}
+
 // TestAdapter_HTTPRoundTrip wires an adapter to a shared mux (client
 // and server on the same mux), dispatches a Request, and asserts the
 // handler's output comes back. This is the SDK's canonical happy path
@@ -187,15 +235,22 @@ func captureHandler(t *testing.T, a *adapter.Adapter) rpc.Handler {
 }
 
 type fakeTransport struct {
-	mu       sync.Mutex
-	handlers map[string]rpc.Handler
-	done     chan struct{}
+	mu             sync.Mutex
+	handlers       map[string]rpc.Handler
+	done           chan struct{}
+	terminalErrors chan error
 }
 
 func (f *fakeTransport) Consume(cfg rpc.ConsumerConfig) (rpc.Subscription, error) {
 	f.mu.Lock()
 	f.handlers[cfg.Endpoint] = cfg.Handler
 	f.mu.Unlock()
+	if f.terminalErrors != nil {
+		return &fakeTerminalErrorSubscription{
+			endpoint:       cfg.Endpoint,
+			terminalErrors: f.terminalErrors,
+		}, nil
+	}
 	return &fakeSubscription{endpoint: cfg.Endpoint}, nil
 }
 
@@ -211,3 +266,14 @@ type fakeSubscription struct{ endpoint string }
 
 func (s *fakeSubscription) Endpoint() string { return s.endpoint }
 func (s *fakeSubscription) Close() error     { return nil }
+
+type fakeTerminalErrorSubscription struct {
+	endpoint       string
+	terminalErrors <-chan error
+}
+
+func (s *fakeTerminalErrorSubscription) Endpoint() string { return s.endpoint }
+func (s *fakeTerminalErrorSubscription) Close() error     { return nil }
+func (s *fakeTerminalErrorSubscription) TerminalErrors() <-chan error {
+	return s.terminalErrors
+}

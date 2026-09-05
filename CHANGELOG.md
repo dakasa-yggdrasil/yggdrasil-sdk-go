@@ -4,6 +4,40 @@ All notable changes to `yggdrasil-sdk-go` are documented here. The
 format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [v0.9.1] - 2026-09-05
+
+Patch release. Fixed AMQP adapters silently creating classic fixed queues when
+the deployment-owned RabbitMQ definitions were missing.
+
+### Fixed
+
+- AMQP consumers now use passive queue declaration as a non-mutating existence
+  gate. Missing or inaccessible fixed queues fail startup loudly instead of
+  being created by the adapter with broker defaults.
+- Reconnects repeat the same passive existence check before consuming.
+  Permanent access, missing, locked, or broker-precondition errors terminate
+  the subscription and propagate through `Adapter.Run`, so a pod cannot remain
+  healthy-looking with zero consumers. Connection failures still retry with
+  exponential backoff.
+- Publish no longer holds the publish-channel mutex while reconnecting. This
+  removes a self-deadlock when Publish wins the race to recover a dropped
+  connection.
+
+### Added
+
+- `rpc.TerminalErrorSubscription`, an optional subscription contract watched by
+  `Adapter.Run` for asynchronous failures that require process restart or
+  operator action.
+
+### Migration notes
+
+Provision every `yggdrasil.adapter.<integration_type>.{describe,execute}` queue
+as durable quorum topology before rolling an adapter onto v0.9.1. Fixed queues
+and their retry/DLX companions remain owned by the platform definitions, not by
+the SDK. RabbitMQ passive declaration checks existence but does not compare
+durability, auto-delete, or `x-queue-type`; the deployment must validate those
+attributes through the management API before starting adapters.
+
 ## [v0.9.0] - 2026-06-27
 
 Additive minor release. Introduces the **verified-caller** contract for

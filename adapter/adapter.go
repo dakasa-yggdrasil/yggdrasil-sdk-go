@@ -177,6 +177,9 @@ func (a *Adapter) Run(ctx context.Context) error {
 	}
 
 	subs := make([]rpc.Subscription, 0, len(handlers))
+	runDone := make(chan struct{})
+	terminalErrors := make(chan error, len(handlers))
+	defer close(runDone)
 	defer func() {
 		for _, sub := range subs {
 			_ = sub.Close()
@@ -196,10 +199,30 @@ func (a *Adapter) Run(ctx context.Context) error {
 			return fmt.Errorf("adapter: consume %q: %w", capability, err)
 		}
 		subs = append(subs, sub)
+		if source, ok := sub.(rpc.TerminalErrorSubscription); ok {
+			endpoint := sub.Endpoint()
+			go func() {
+				select {
+				case err, open := <-source.TerminalErrors():
+					if !open || err == nil {
+						return
+					}
+					select {
+					case terminalErrors <- fmt.Errorf("subscription %q: %w", endpoint, err):
+					case <-runDone:
+					}
+				case <-runDone:
+				}
+			}()
+		}
 	}
 
-	<-ctx.Done()
-	return nil
+	select {
+	case <-ctx.Done():
+		return nil
+	case err := <-terminalErrors:
+		return fmt.Errorf("adapter: terminal consumer failure: %w", err)
+	}
 }
 
 // WithSignalHandler returns a context cancelled on SIGINT or SIGTERM.

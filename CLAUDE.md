@@ -79,7 +79,14 @@ protocol/               # (currently empty)
   kubelet restarts the pod — the pattern we hit repeatedly in production.
   See memory `[AMQP cascade root cause RESOLVED 2026-05-26]`.
 - **Subscription-level auto-reconnect** (commit `50d77ef`). Consumer
-  goroutines reopen the channel + redeclare the queue on `channel.close`.
+  goroutines reopen the channel + passively re-check that the fixed queue
+  exists on `channel.close`. Since v0.9.1 the SDK never creates fixed queues;
+  canonical platform definitions must exist before adapter startup. Passive
+  AMQP does not compare queue type or durability, so production rollout must
+  verify those through RabbitMQ management. Permanent 403/404/405/406
+  declaration failures propagate through
+  `rpc.TerminalErrorSubscription` and make `Adapter.Run` return; only transient
+  connection failures remain in backoff.
 - **`adapter.ListenAMQP` retry/backoff** (commit `010e964`) — retries
   the initial AMQP dial with exponential backoff so a pod-startup
   race against rabbit doesn't crashloop.

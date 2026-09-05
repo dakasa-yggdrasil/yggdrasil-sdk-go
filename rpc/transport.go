@@ -76,6 +76,16 @@ type Subscription interface {
 	Close() error
 }
 
+// TerminalErrorSubscription is implemented by subscriptions that can become
+// permanently unusable after Consume has succeeded. TerminalErrors delivers at
+// most one non-nil error. Adapter.Run watches this optional contract so a
+// topology violation cannot leave a process alive without an active consumer.
+// Transient reconnect failures are not reported here.
+type TerminalErrorSubscription interface {
+	Subscription
+	TerminalErrors() <-chan error
+}
+
 // ConsumerConfig configures one Consume call.
 type ConsumerConfig struct {
 	// Endpoint names the message path (AMQP queue, HTTP route, Kafka

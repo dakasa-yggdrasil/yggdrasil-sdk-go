@@ -9,7 +9,7 @@ Back to the [README](../README.md) · See also
 [PACKAGES](PACKAGES.md) · [RECONCILE-AND-EVENTS](RECONCILE-AND-EVENTS.md).
 
 > Every claim here is derived from the source in this repo (`adapter/`,
-> `rpc/`, `sdk/reconcile/`, `sdk/events/`). Verified against `v0.8.5`.
+> `rpc/`, `sdk/reconcile/`, `sdk/events/`). Verified against `v0.9.1`.
 
 ---
 
@@ -36,7 +36,7 @@ owns framing and Ack/Nack/Reply.
 ## 1. Install
 
 ```sh
-go get github.com/dakasa-yggdrasil/yggdrasil-sdk-go@v0.8.5
+go get github.com/dakasa-yggdrasil/yggdrasil-sdk-go@v0.9.1
 ```
 
 Go 1.25+. No `yggdrasil-core` dependency — the wire is JSON.
@@ -105,6 +105,12 @@ What the SDK does for you here:
 The handlers are identical across transports. For AMQP the SDK retries the
 initial dial with backoff and runs a reconnect watchdog automatically — see
 [PACKAGES.md#rpcamqp](PACKAGES.md#rpcamqp).
+
+AMQP fixed queues must already exist as durable quorum queues. `Run` passively
+checks that each queue exists and fails if the platform definitions have not
+been imported; the SDK never creates `describe` or `execute` queues. Passive
+AMQP declaration does not compare queue attributes, so the deployment gate must
+verify durability and `x-queue-type=quorum` through RabbitMQ's management API.
 
 > **Note — `Run` requires at least one `Register` and a transport.** It returns
 > a clear error otherwise (`no handlers registered` / `no transport configured`).

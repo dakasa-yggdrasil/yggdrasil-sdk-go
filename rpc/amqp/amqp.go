@@ -25,6 +25,12 @@ import (
 // the error and let the transport's outer loop retry with backoff.
 type DialFunc func() (*amqp091.Connection, error)
 
+// ErrFixedQueueUnavailable marks a permanent inability to consume from a
+// deployment-owned fixed queue. Missing, inaccessible, locked, or rejected
+// queues require operator action; retrying the same passive check cannot repair
+// them.
+var ErrFixedQueueUnavailable = errors.New("amqp: fixed consumer queue unavailable")
+
 // Transport is an rpc.Transport backed by one AMQP connection.
 // The connection is expected to outlive the transport; Close closes
 // it along with the shared publish channel.
@@ -155,8 +161,12 @@ func (t *Transport) SetEndpointPrefix(prefix string) {
 	t.endpointPrefix = prefix
 }
 
-// Consume declares the endpoint queue (durable) and starts a
-// consumer that dispatches each delivery to cfg.Handler.
+// Consume requires the endpoint queue to have been provisioned, then starts a
+// consumer that dispatches each delivery to cfg.Handler. Queue topology belongs
+// to the deployment control plane; the SDK deliberately never creates fixed
+// queues at adapter startup. AMQP passive declare validates existence only, so
+// the deployment gate must verify durable/quorum attributes through RabbitMQ's
+// management surface before this consumer starts.
 //
 // The consumer auto-recovers when the AMQP channel closes (broker
 // restart, connection blip, channel reset). Without that, a single
@@ -166,9 +176,9 @@ func (t *Transport) SetEndpointPrefix(prefix string) {
 // and messages pile up unread. Recovery is event-driven via
 // ch.NotifyClose: each time the channel signals close while sub.done
 // has not been closed by the caller, the subscription tears down the
-// dead channel and re-runs setupConsumer. setupConsumer is idempotent
-// (QueueDeclare with the same params is a no-op) so this is safe to
-// retry. Backoff doubles up to 30s to ride out broker restart windows
+// dead channel and re-runs setupConsumer. setupConsumer passively re-validates
+// that the same pre-provisioned queue exists, so this is safe to retry. Backoff
+// doubles up to 30s to ride out broker restart windows
 // without thrashing.
 //
 // When the underlying connection is dropped (rabbit pod restart), the
@@ -200,10 +210,12 @@ func (t *Transport) Consume(cfg rpc.ConsumerConfig) (rpc.Subscription, error) {
 	}
 
 	sub := &subscription{
-		transport: t,
-		endpoint:  queueName,
-		ch:        ch,
-		done:      make(chan struct{}),
+		setupConsumer:  t.setupConsumer,
+		retryAfter:     time.After,
+		endpoint:       queueName,
+		ch:             ch,
+		done:           make(chan struct{}),
+		terminalErrors: make(chan error, 1),
 	}
 
 	go sub.runWithReconnect(deliveries, cfg)
@@ -215,13 +227,13 @@ func (t *Transport) Consume(cfg rpc.ConsumerConfig) (rpc.Subscription, error) {
 	return sub, nil
 }
 
-// setupConsumer opens a channel, declares the queue (idempotent on
-// re-runs because QueueDeclare with identical parameters is a no-op),
-// sets the prefetch QoS and starts the basic.consume. Factored out of
-// Consume so the subscription's reconnect loop can call it again to
-// rebind after a broker channel close without re-running input
-// validation. Caller owns the returned channel and is responsible for
-// closing it when done.
+// setupConsumer opens a channel, passively asserts that the fixed queue already
+// exists, sets the prefetch QoS and starts basic.consume. RabbitMQ ignores
+// durable, auto-delete and arguments on passive declare; the control plane must
+// verify those attributes separately. Factored out of Consume so the
+// subscription's reconnect loop can call it again to rebind after a broker
+// channel close without re-running input validation. Caller owns the returned
+// channel and is responsible for closing it when done.
 //
 // If the connection itself is closed (broker restart), this attempts a
 // single inline reconnect via the transport's DialFunc before opening
@@ -237,9 +249,9 @@ func (t *Transport) setupConsumer(queueName string, concurrency int) (*amqp091.C
 	if err != nil {
 		return nil, nil, fmt.Errorf("amqp consume: open channel: %w", err)
 	}
-	if _, err := ch.QueueDeclare(queueName, true, false, false, false, nil); err != nil {
+	if err := requireFixedConsumerQueue(ch, queueName); err != nil {
 		_ = ch.Close()
-		return nil, nil, fmt.Errorf("amqp consume: declare queue %q: %w", queueName, err)
+		return nil, nil, fmt.Errorf("amqp consume: require predeclared fixed queue %q: %w", queueName, err)
 	}
 	if err := ch.Qos(concurrency, 0, false); err != nil {
 		_ = ch.Close()
@@ -251,6 +263,50 @@ func (t *Transport) setupConsumer(queueName string, concurrency int) (*amqp091.C
 		return nil, nil, fmt.Errorf("amqp consume: start consumer %q: %w", queueName, err)
 	}
 	return ch, deliveries, nil
+}
+
+type passiveQueueDeclarer interface {
+	QueueDeclarePassive(name string, durable, autoDelete, exclusive, noWait bool, args amqp091.Table) (amqp091.Queue, error)
+}
+
+// requireFixedConsumerQueue validates existence without taking topology
+// ownership. RabbitMQ's passive queue.declare intentionally ignores durable,
+// auto-delete, exclusive and arguments, so it cannot distinguish classic from
+// quorum. The deployment control plane must perform that topology check through
+// the management API before starting adapters.
+func requireFixedConsumerQueue(ch passiveQueueDeclarer, queueName string) error {
+	_, err := ch.QueueDeclarePassive(
+		queueName,
+		true,
+		false,
+		false,
+		false,
+		nil,
+	)
+	return markFixedQueueUnavailableError(err)
+}
+
+func isFixedQueuePermanentError(err error) bool {
+	var brokerErr *amqp091.Error
+	if !errors.As(err, &brokerErr) {
+		return false
+	}
+	switch brokerErr.Code {
+	case amqp091.AccessRefused, amqp091.NotFound, amqp091.ResourceLocked, amqp091.PreconditionFailed:
+		return true
+	default:
+		return false
+	}
+}
+
+func markFixedQueueUnavailableError(err error) error {
+	if err == nil || errors.Is(err, ErrFixedQueueUnavailable) {
+		return err
+	}
+	if isFixedQueuePermanentError(err) {
+		return fmt.Errorf("%w: %w", ErrFixedQueueUnavailable, err)
+	}
+	return err
 }
 
 // connectionForUse returns a live connection, attempting a single
@@ -554,6 +610,17 @@ func (t *Transport) Close() error {
 }
 
 func (t *Transport) publishChannel() (*amqp091.Channel, error) {
+	// Resolve/reconnect the connection before taking pubMu. reconnect resets
+	// pubCh under pubMu; calling it while already holding that lock deadlocks
+	// when Publish itself wins the race to recover a dropped connection.
+	conn, err := t.connectionForUse()
+	if err != nil {
+		return nil, fmt.Errorf("amqp: get connection for publish: %w", err)
+	}
+	if conn == nil {
+		return nil, fmt.Errorf("amqp: get connection for publish: no connection available")
+	}
+
 	t.pubMu.Lock()
 	defer t.pubMu.Unlock()
 
@@ -561,10 +628,6 @@ func (t *Transport) publishChannel() (*amqp091.Channel, error) {
 		return t.pubCh, nil
 	}
 
-	conn, err := t.connectionForUse()
-	if err != nil {
-		return nil, fmt.Errorf("amqp: get connection for publish: %w", err)
-	}
 	ch, err := conn.Channel()
 	if err != nil {
 		return nil, fmt.Errorf("amqp: open publish channel: %w", err)
@@ -575,15 +638,29 @@ func (t *Transport) publishChannel() (*amqp091.Channel, error) {
 
 // subscription wraps one active consumer.
 type subscription struct {
-	transport *Transport
-	endpoint  string
-	chMu      sync.Mutex // guards ch — swapped on reconnect
-	ch        *amqp091.Channel
-	done      chan struct{}
-	closeOnce sync.Once
+	setupConsumer  func(string, int) (*amqp091.Channel, <-chan amqp091.Delivery, error)
+	retryAfter     func(time.Duration) <-chan time.Time
+	endpoint       string
+	chMu           sync.Mutex // guards ch — swapped on reconnect
+	ch             *amqp091.Channel
+	done           chan struct{}
+	closeOnce      sync.Once
+	terminalErrors chan error
+	terminalOnce   sync.Once
 }
 
 func (s *subscription) Endpoint() string { return s.endpoint }
+
+// TerminalErrors reports a permanent consumer failure. The channel is buffered
+// so reporting never blocks even when the transport is used without Adapter.
+func (s *subscription) TerminalErrors() <-chan error { return s.terminalErrors }
+
+func (s *subscription) reportTerminal(err error) {
+	if err == nil {
+		return
+	}
+	s.terminalOnce.Do(func() { s.terminalErrors <- err })
+}
 
 func (s *subscription) currentChannel() *amqp091.Channel {
 	s.chMu.Lock()
@@ -621,7 +698,11 @@ func (s *subscription) Close() error {
 // setupConsumer routes through Transport.connectionForUse which
 // triggers a re-dial via the transport's DialFunc. From the
 // subscription's point of view that is just "the next setupConsumer
-// retry happened to succeed" — no extra plumbing needed here.
+// retry happened to succeed" — no extra plumbing needed here. Missing
+// or inaccessible fixed queue is permanent: it is reported through
+// TerminalErrors and stops this reconnect loop so Adapter.Run can exit. Queue
+// type/durability remain a management-plane validation because passive AMQP
+// declare does not expose them.
 func (s *subscription) runWithReconnect(initialDeliveries <-chan amqp091.Delivery, cfg rpc.ConsumerConfig) {
 	deliveries := initialDeliveries
 	backoff := time.Second
@@ -644,14 +725,18 @@ func (s *subscription) runWithReconnect(initialDeliveries <-chan amqp091.Deliver
 			select {
 			case <-s.done:
 				return
-			case <-time.After(backoff):
+			case <-s.retryAfter(backoff):
 			}
-			ch, newDeliveries, err := s.transport.setupConsumer(s.endpoint, cfg.Concurrency)
+			ch, newDeliveries, err := s.setupConsumer(s.endpoint, cfg.Concurrency)
 			if err == nil {
 				s.swapChannel(ch)
 				deliveries = newDeliveries
 				backoff = time.Second // reset on successful rebind
 				break
+			}
+			if queueErr := markFixedQueueUnavailableError(err); errors.Is(queueErr, ErrFixedQueueUnavailable) {
+				s.reportTerminal(fmt.Errorf("consumer queue %q: %w", s.endpoint, queueErr))
+				return
 			}
 			if backoff < 30*time.Second {
 				backoff *= 2
