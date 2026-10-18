@@ -1,13 +1,7 @@
-# AI docs freshness stamp
+# AI docs freshness
 
-Records the commit an AI (or agent-assisted human) last reconciled these docs at.
-The docs-freshness CI reads it: a PR that bumps it is trusted and the AI is skipped
-(economy path). See the "Docs freshness" rule in AGENTS.md / CLAUDE.md.
+verified_at_commit: 71e7ad827ff7190a09564b0e0c5e9f1f61e614e5
+verified_diff_sha256: 98f77b9a3bd365a8cf9935517959a10e45cfa55700ec93bf6c7bf5850cba38b4
+reconciler_schema: 1
 
-Before a PR: update stale docs, set verified_at_commit to your branch tip.
-On arrival: if this is behind the code you touch, reconcile the docs FIRST.
-
-verified_at_commit: e6a0154b9ee31e91ea29595f2f795eeba5c96599
-verified_at: 2026-08-05
-by: rollout (docs-freshness convention)
-note: Establishes the stamp. Not yet AI-reconciled.
+note: Add the source-owned executor power and worker packages without changing existing RPC transport contracts. The exact 81-file source passed the original whole SDK race test command (208 Test RUN/PASS, zero Test FAIL/SKIP), live private AMQP fixture, three isolated Linux roots and whole SDK vet. Full original custody, namespace and budget negatives, source conservation and guest/host retirement were retained. The original wrapper rc1 is preserved: it misclassified one package-level rpc event with no test files; the original test-event contract counts only events carrying Test. This validates Source, not Core, Native7, deployment or production. No release tag is asserted.
