@@ -4,6 +4,23 @@ All notable changes to `yggdrasil-sdk-go` are documented here. The
 format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- Planned AMQP/HTTP shutdown stops admission and joins handlers through reply
+  and settlement before transport closure. Concurrent closes join the same
+  drain, and queued HTTP requests do not start after the cutoff.
+- Adapter shutdown uses its existing request timeout plus settlement headroom
+  and reports incomplete drains instead of ignoring HTTP shutdown errors.
+
+### Added
+
+- Optional `CloseContext` methods on concrete subscriptions/transports, without
+  changing the existing RPC interfaces or wire protocol. Deadline expiry remains
+  a failure/unknown boundary and does not immediately cancel active handlers.
+- GitHub CI race tests with an actual RabbitMQ service. No local test execution.
+
 ## [v0.9.0] - 2026-06-27
 
 Additive minor release. Introduces the **verified-caller** contract for

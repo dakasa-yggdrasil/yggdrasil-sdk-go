@@ -89,7 +89,7 @@ type Adapter struct {
 	// afterRun is deferred by Run for cleanup (server Shutdown,
 	// connection Close). Set alongside beforeRun by the transport
 	// helpers.
-	afterRun func()
+	afterRun func(context.Context) error
 }
 
 // New constructs a fresh Adapter. Call chain is:
@@ -145,7 +145,7 @@ func (a *Adapter) Transport(t rpc.Transport) *Adapter {
 // opt-in via the exported WithSignalHandler; Run alone does not
 // install SIGINT/SIGTERM traps, so callers can compose their own
 // cancellation.
-func (a *Adapter) Run(ctx context.Context) error {
+func (a *Adapter) Run(ctx context.Context) (runErr error) {
 	a.mu.Lock()
 	handlers := make(map[string]Handler, len(a.handlers))
 	for k, v := range a.handlers {
@@ -172,14 +172,36 @@ func (a *Adapter) Run(ctx context.Context) error {
 	if transport == nil {
 		return errors.New("adapter: no transport configured — call ListenHTTP, ListenAMQP, or Transport before Run")
 	}
-	if afterRun != nil {
-		defer afterRun()
-	}
-
 	subs := make([]rpc.Subscription, 0, len(handlers))
 	defer func() {
+		// Shutdown is distinct from the cancelled admission/signal context.
+		// Existing handler deadlines remain intact; allow settlement to return.
+		timeout := a.config.DefaultTimeout
+		if timeout <= 0 {
+			timeout = 30 * time.Second
+		}
+		drainCtx, cancel := context.WithTimeout(context.Background(), timeout+time.Second)
+		defer cancel()
+		errs := make(chan error, len(subs))
 		for _, sub := range subs {
-			_ = sub.Close()
+			go func(s rpc.Subscription) {
+				if closer, ok := s.(interface{ CloseContext(context.Context) error }); ok {
+					errs <- closer.CloseContext(drainCtx)
+				} else {
+					errs <- s.Close()
+				}
+			}(sub)
+		}
+		for range subs {
+			select {
+			case err := <-errs:
+				runErr = errors.Join(runErr, err)
+			case <-drainCtx.Done():
+				runErr = errors.Join(runErr, drainCtx.Err())
+			}
+		}
+		if afterRun != nil {
+			runErr = errors.Join(runErr, afterRun(drainCtx))
 		}
 	}()
 
