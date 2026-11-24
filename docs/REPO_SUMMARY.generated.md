@@ -1,6 +1,6 @@
 # Repo Summary (generated)
 
-_Generated from HEAD at: 2026-11-24T16:16:34-03:00_
+_Generated from HEAD at: 2026-11-24T16:19:46-03:00_
 
 ## Languages
 
@@ -22,7 +22,7 @@ _Generated from HEAD at: 2026-11-24T16:16:34-03:00_
 
 - sdk/reconcile: 14 files (96.5 KB)
 - surface: 12 files (32.2 KB)
-- adapter: 6 files (42.6 KB)
+- adapter: 6 files (42.8 KB)
 - sdk/events: 5 files (22.1 KB)
 - sig/hmac: 5 files (12.8 KB)
 - webhookhttp: 5 files (20.1 KB)
@@ -40,7 +40,7 @@ _Generated from HEAD at: 2026-11-24T16:16:34-03:00_
 - rpc/amqp/amqp_reconnect_test.go: 15.0 KB
 - rpc/http/http.go: 13.6 KB
 - sdk/reconcile/emit_test.go: 12.4 KB
-- adapter/original_drain_test.go: 12.0 KB
+- adapter/original_drain_test.go: 12.1 KB
 - adapter/adapter.go: 10.7 KB
 - sdk/reconcile/destroy_resource_id_test.go: 9.4 KB
 - sdk/reconcile/destroy_with_desired_test.go: 9.3 KB

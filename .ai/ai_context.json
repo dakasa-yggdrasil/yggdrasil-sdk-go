@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "generated_at": "2026-11-24T16:16:34-03:00",
+  "generated_at": "2026-11-24T16:19:46-03:00",
   "primary_language": "go",
   "languages": {
     ".go": 57,
@@ -8,8 +8,8 @@
     ".yml": 2
   },
   "provenance": {
-    "commit": "4f63d90a857695875eb405ae7d22bb3818b65493",
-    "dirty": false,
+    "commit": "7be45d967ef903b32eef8e814ec3d1a918c9c86e",
+    "dirty": true,
     "files": [
       {
         "path": "CLAUDE.md",
@@ -111,7 +111,7 @@
     },
     {
       "path": "adapter/original_drain_test.go",
-      "kb": 11
+      "kb": 12
     },
     {
       "path": "adapter/adapter.go",
