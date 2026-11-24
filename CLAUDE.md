@@ -230,3 +230,11 @@ other endpoints still stop/join, while global afterRun is deferred if a panic
 left settlement unknown. A failed WaitDrained does not license application
 exit, retry or a claim that external work joined. Existing Kustomize/Helm HOLD
 policy stays in place until separate consumer qualification.
+
+## Additive v0.9.1 queue compatibility
+
+The original-drain Source candidate also retains v0.9.1 fixed consumer queues:
+passive existence checks, optional TerminalErrorSubscription and permanent
+ErrFixedQueueUnavailable propagation. Publish reconnect resolves the connection
+before pubMu. Drain ownership, Reply/Ack/Nack and amqp091-go1.13 are preserved.
+See docs/ORIGINAL-DRAIN.md for the error/unknown contract and CI-only coverage.
