@@ -71,6 +71,11 @@ type Transport interface {
 
 // Subscription represents one active consumer. Closing it stops new
 // deliveries and waits for any in-flight handler to finish.
+// Built-in subscriptions also implement optional StopAdmission(), which returns
+// after synchronously refusing new invocations without awaiting original work.
+// The public Subscription interface remains unchanged. Legacy custom Close()
+// implementations retain their own contract; callers cannot infer a separate
+// synchronous stop phase or stronger join proof than that implementation gives.
 type Subscription interface {
 	Endpoint() string
 	Close() error

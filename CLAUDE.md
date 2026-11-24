@@ -210,3 +210,17 @@ or builds. Inspect CI for the AMQP/HTTP concurrency and real broker results.
 - Surface manifest types + validator → `surface/{types,validate}.go`
 - Surface HTTP handlers → `surface/handler.go`
 - Worked example → `examples/minimal/`
+
+## Exact original drain Source candidate
+
+`Adapter.Run` creates one immutable original cleanup handle before startup and
+rejects concurrent/repeated Run on the same adapter. `WaitDrained(ctx)` refuses
+before Run; afterward it joins that same subscription settlement and afterRun
+cleanup. A waiter timeout cancels only its wait. The existing request timeout
+and Run `DefaultTimeout+1s` caller budget are unchanged. Built-in HTTP/AMQP
+subscriptions synchronously stop all admission before joining any endpoint;
+legacy custom Subscription keeps its existing concurrent Close contract, with
+no stronger admission or settlement promise inferred. The public Subscription
+interface and wire/queue/event contracts are unchanged. Green098 consumers and
+live desired manifests are not repinned by this Source PR. CI alone exercises
+actual HTTP/AMQP overruns and original cleanup; no local tests/builds.

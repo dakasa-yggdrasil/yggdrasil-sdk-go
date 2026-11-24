@@ -265,6 +265,9 @@ func (t *Transport) CloseContext(ctx context.Context) error {
 		t.subs = nil
 		t.subsMu.Unlock()
 		go func() {
+			for _, sub := range subs {
+				sub.StopAdmission()
+			}
 			var wg sync.WaitGroup
 			for _, sub := range subs {
 				wg.Add(1)
@@ -307,9 +310,9 @@ func (s *subscription) Endpoint() string { return s.endpoint }
 
 func (s *subscription) Close() error { return s.CloseContext(context.Background()) }
 
-// CloseContext leaves admitted request contexts intact and stops waiting
-// requests from becoming new handler invocations after admission closes.
-func (s *subscription) CloseContext(ctx context.Context) error {
+// StopAdmission synchronously refuses new invocations without waiting for
+// original handlers or their reply/settlement. Repeated calls share one drain.
+func (s *subscription) StopAdmission() {
 	s.closedMu.Lock()
 	if !s.closed {
 		s.closed = true
@@ -317,6 +320,12 @@ func (s *subscription) CloseContext(ctx context.Context) error {
 		go func() { s.handlers.Wait(); close(s.closeDone) }()
 	}
 	s.closedMu.Unlock()
+}
+
+// CloseContext leaves admitted request contexts intact and bounds only this
+// wait for the same original handler/reply drain.
+func (s *subscription) CloseContext(ctx context.Context) error {
+	s.StopAdmission()
 	select {
 	case <-s.closeDone:
 		return nil

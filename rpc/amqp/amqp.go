@@ -548,6 +548,9 @@ func (t *Transport) CloseContext(ctx context.Context) error {
 		t.subs = nil
 		t.subsMu.Unlock()
 		go func() {
+			for _, sub := range subs {
+				sub.StopAdmission()
+			}
 			var wg sync.WaitGroup
 			errs := make(chan error, len(subs))
 			for _, sub := range subs {
@@ -641,9 +644,9 @@ func (s *subscription) swapChannel(ch *amqp091.Channel) bool {
 
 func (s *subscription) Close() error { return s.CloseContext(context.Background()) }
 
-// CloseContext stops broker admission first, leaving the channel available to
-// admitted handlers until their replies and Ack/Nack have actually returned.
-func (s *subscription) CloseContext(ctx context.Context) error {
+// StopAdmission closes local admission synchronously. Broker cancellation and
+// original reply/Ack/channel joins remain owned by the same closeOnce drain.
+func (s *subscription) StopAdmission() {
 	s.closeOnce.Do(func() {
 		s.chMu.Lock()
 		close(s.done)
@@ -660,6 +663,12 @@ func (s *subscription) CloseContext(ctx context.Context) error {
 			close(s.closeDone)
 		}()
 	})
+}
+
+// CloseContext bounds only this wait; the original handler/reply/Ack/channel
+// drain continues until completion without cancelling admitted contexts.
+func (s *subscription) CloseContext(ctx context.Context) error {
+	s.StopAdmission()
 	select {
 	case <-s.closeDone:
 		return s.closeErr
