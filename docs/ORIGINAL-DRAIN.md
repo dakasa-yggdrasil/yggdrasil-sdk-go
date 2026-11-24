@@ -96,3 +96,11 @@ The final wait must preserve that error after joining the same settlement.
 No consumer SDK pin, vendor tree, tag or runtime image is changed here. The
 future EFI pin must refresh its existing vendor tree as well as module files;
 a version chosen for v0.9.1 consumers must sort above v0.9.1 under Go MVS.
+
+RabbitMQ3.13.7 quorum statistics retain a cancelled consumer record while its
+original checked-out message awaits settlement (`rabbit_fifo:query_stat` counts
+that map entry). Thus the pre-Ack consumer count is not an admission count.
+Classic regressions retain their original zero-consumer assertions. Added
+quorum regressions retain the original reply/Ack and channel while another
+message waits; after the same original settlement joins, the pending message
+must remain ready, no second handler ran, and the consumer count must be zero.

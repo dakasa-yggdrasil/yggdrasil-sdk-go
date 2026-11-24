@@ -60,12 +60,15 @@ func (s *originalTerminalAckSub) CloseContext(ctx context.Context) error {
 }
 
 func TestOriginalAMQPDrainOverrunWaitsForOriginalAckAndConnection(t *testing.T) {
-	testOriginalAMQPDrain(t, nil)
+	testOriginalAMQPDrain(t, nil, "classic")
 }
 func TestTerminalRunFailurePreservesOriginalAckOwnerAndFinalError(t *testing.T) {
-	testOriginalAMQPDrain(t, errors.New("original fixed queue unavailable"))
+	testOriginalAMQPDrain(t, errors.New("original fixed queue unavailable"), "classic")
 }
-func testOriginalAMQPDrain(t *testing.T, terminalCause error) {
+func TestQuorumTerminalFailureKeepsOriginalAckAndUnadmittedMessage(t *testing.T) {
+	testOriginalAMQPDrain(t, errors.New("quorum original fixed queue unavailable"), "quorum")
+}
+func testOriginalAMQPDrain(t *testing.T, terminalCause error, queueType string) {
 	url := os.Getenv("YGGDRASIL_TEST_AMQP_URL")
 	if url == "" {
 		t.Skip("requires configured isolated CI RabbitMQ")
@@ -86,7 +89,7 @@ func testOriginalAMQPDrain(t *testing.T, terminalCause error) {
 	}
 	defer func() { _ = admin.Close() }()
 	queue := "original-drain-" + uuid.NewString()
-	if _, err := admin.QueueDeclare(queue, true, false, false, false, amqp091.Table{"x-queue-type": "quorum"}); err != nil {
+	if _, err := admin.QueueDeclare(queue, true, false, false, false, amqp091.Table{"x-queue-type": queueType}); err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _, _ = admin.QueueDelete(queue, false, false, false) }()
@@ -147,8 +150,36 @@ func testOriginalAMQPDrain(t *testing.T, terminalCause error) {
 		t.Fatal("original connection closed under pending Ack")
 	}
 	q, err := admin.QueueInspect(queue)
-	if err != nil || q.Consumers != 0 {
-		t.Fatalf("admission did not stop: %+v %v", q, err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if queueType == "classic" {
+		if q.Consumers != 0 {
+			t.Fatalf("classic consumer did not cancel: %+v", q)
+		}
+	} else {
+		// Rabbit3.13.7 query_stat counts cancelled quorum records until their
+		// original checked-out message settles. It is not an admission count.
+		if q.Consumers != 1 {
+			t.Fatalf("pending quorum original record absent: %+v", q)
+		}
+		if err := admin.PublishWithContext(context.Background(), "", queue, false, false, amqp091.Publishing{Body: []byte("not admitted")}); err != nil {
+			t.Fatal(err)
+		}
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			pending, err := admin.QueueInspect(queue)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if pending.Messages == 1 {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("quorum unadmitted message not observed before original Ack")
+			}
+			time.Sleep(time.Millisecond)
+		}
 	}
 	cancelled, cancelWait := context.WithCancel(context.Background())
 	cancelWait()
@@ -178,7 +209,11 @@ func testOriginalAMQPDrain(t *testing.T, terminalCause error) {
 		t.Fatal("original connection join missing or original call replayed")
 	}
 	q, err = admin.QueueInspect(queue)
-	if err != nil || q.Messages != 0 || q.Consumers != 0 {
+	pending := 0
+	if queueType == "quorum" {
+		pending = 1
+	}
+	if err != nil || q.Messages != pending || q.Consumers != 0 {
 		t.Fatalf("original message not settled: %+v %v", q, err)
 	}
 }
