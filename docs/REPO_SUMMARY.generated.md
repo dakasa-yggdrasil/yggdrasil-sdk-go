@@ -1,10 +1,10 @@
 # Repo Summary (generated)
 
-_Generated from HEAD at: 2026-11-24T16:19:46-03:00_
+_Generated from HEAD at: 2026-11-24T16:27:19-03:00_
 
 ## Languages
 
-- `.go`: 57 files
+- `.go`: 58 files
 - `.yaml`: 1 files
 - `.yml`: 2 files
 
@@ -22,7 +22,7 @@ _Generated from HEAD at: 2026-11-24T16:19:46-03:00_
 
 - sdk/reconcile: 14 files (96.5 KB)
 - surface: 12 files (32.2 KB)
-- adapter: 6 files (42.8 KB)
+- adapter: 7 files (49.0 KB)
 - sdk/events: 5 files (22.1 KB)
 - sig/hmac: 5 files (12.8 KB)
 - webhookhttp: 5 files (20.1 KB)
@@ -41,7 +41,7 @@ _Generated from HEAD at: 2026-11-24T16:19:46-03:00_
 - rpc/http/http.go: 13.6 KB
 - sdk/reconcile/emit_test.go: 12.4 KB
 - adapter/original_drain_test.go: 12.1 KB
-- adapter/adapter.go: 10.7 KB
+- adapter/adapter.go: 11.6 KB
 - sdk/reconcile/destroy_resource_id_test.go: 9.4 KB
 - sdk/reconcile/destroy_with_desired_test.go: 9.3 KB
 - webhookhttp/server_test.go: 8.8 KB

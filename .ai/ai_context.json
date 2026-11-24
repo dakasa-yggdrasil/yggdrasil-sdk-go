@@ -1,19 +1,19 @@
 {
   "schema_version": 2,
-  "generated_at": "2026-11-24T16:19:46-03:00",
+  "generated_at": "2026-11-24T16:27:19-03:00",
   "primary_language": "go",
   "languages": {
-    ".go": 57,
+    ".go": 58,
     ".yaml": 1,
     ".yml": 2
   },
   "provenance": {
-    "commit": "7be45d967ef903b32eef8e814ec3d1a918c9c86e",
+    "commit": "299ce30c6fdd75b8fe3a40b6421f9904b13a22df",
     "dirty": true,
     "files": [
       {
         "path": "CLAUDE.md",
-        "sha256": "404d4772cb1602e24f49da8c28b8db06fb4374f4a847b8ecb54d2da8583a8259"
+        "sha256": "7f242ffdd1e51e26888b76d993c7e421d875913ef937ac41f2d2f0e3de82d36d"
       },
       {
         "path": "README.md",
@@ -39,8 +39,8 @@
     },
     {
       "path": "adapter",
-      "files": 6,
-      "kb": 42
+      "files": 7,
+      "kb": 48
     },
     {
       "path": "sdk/events",
@@ -115,7 +115,7 @@
     },
     {
       "path": "adapter/adapter.go",
-      "kb": 10
+      "kb": 11
     },
     {
       "path": "sdk/reconcile/destroy_resource_id_test.go",
