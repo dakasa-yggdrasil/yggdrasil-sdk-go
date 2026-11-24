@@ -7,8 +7,8 @@ The docs-freshness CI reads it: a PR that bumps it is trusted and the AI is skip
 Before a PR: update stale docs, set verified_at_commit to your branch tip.
 On arrival: if this is behind the code you touch, reconcile the docs FIRST.
 
-verified_at_commit: 299ce30c6fdd75b8fe3a40b6421f9904b13a22df
-verified_diff_sha256: cee5540a40aaa97a889756e2fd1b9d904982bc4774fabadffc38b6903443e584
+verified_at_commit: e25868db912229c9ed1bb1a14aa16493ec0a3f8a
+verified_diff_sha256: 2914af1e5bdcff599bc397020f7dcf0fd2fedc5399f7ffc4b5416cfc4dce83d8
 reconciler_schema: 1
 verified_at: 2026-11-24
 by: Codex
@@ -19,3 +19,5 @@ exact_original_drain_source_review: Reviewed immutable first-Run completion hand
 exact_drain_http_fixture_envelope_review: Original genuine CI rejected only a plaintext substring assertion against the existing base64 Body RPC envelope. Decode rpc.Envelope and require exact original Body plus content type; production implementation/wire contract unchanged. Preserve original failed head/CI; successor validation is CI-only.
 
 exact_drain_panic_boundary_review: Reviewed narrow original callback containment, fixed opaque UNQUALIFIED errors and continuation of other original stops/joins. Global afterRun stays deferred under unproved panic settlement; any failed WaitDrained requires application HOLD and proves no external work joined. CI fixtures keep actual external goroutine/other endpoint active; no local executable checks or SDK098/consumer/runtime changes.
+
+exact_drain_nilpanic_and_original_ack_review: Peer P2 closed by action-returned flag, preserving opaque UNQUALIFIED panic(nil) under both GODEBUG modes. Actual old reconnect fixture notified before Ack then intentionally closed its connection; require original Ack plus same-channel QoS broker barrier before notification. Strict payload assertions/production at-least-once behavior unchanged. Both original failures and intermediate cohorts retained; no local tests/builds/runtime actions.

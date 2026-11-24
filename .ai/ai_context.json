@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "generated_at": "2026-11-24T16:27:19-03:00",
+  "generated_at": "2026-11-24T16:33:57-03:00",
   "primary_language": "go",
   "languages": {
     ".go": 58,
@@ -8,7 +8,7 @@
     ".yml": 2
   },
   "provenance": {
-    "commit": "299ce30c6fdd75b8fe3a40b6421f9904b13a22df",
+    "commit": "e25868db912229c9ed1bb1a14aa16493ec0a3f8a",
     "dirty": true,
     "files": [
       {
@@ -40,7 +40,7 @@
     {
       "path": "adapter",
       "files": 7,
-      "kb": 48
+      "kb": 49
     },
     {
       "path": "sdk/events",
