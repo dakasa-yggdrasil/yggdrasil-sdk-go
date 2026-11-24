@@ -14,6 +14,7 @@ package amqp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -47,6 +48,9 @@ func dialOrSkip(t *testing.T) *amqp091.Connection {
 		Dial: amqp091.DefaultDial(2 * time.Second),
 	})
 	if err != nil {
+		if os.Getenv("CI") != "" {
+			t.Fatalf("configured CI RabbitMQ unavailable: %v", err)
+		}
 		t.Skipf("test rabbit not reachable at %s: %v", url, err)
 	}
 	return conn
@@ -56,6 +60,45 @@ func dialOrSkip(t *testing.T) *amqp091.Connection {
 // (and reruns) don't collide on queue residue.
 func uniqueEndpoint(prefix string) string {
 	return prefix + "-" + uuid.NewString()[:8]
+}
+
+// declareQuorumQueue provisions the fixed topology required by Consume. The
+// production owner is definitions.json; integration tests create only their
+// unique fixture queue before exercising reconnect behavior.
+func declareQuorumQueue(t *testing.T, conn *amqp091.Connection, name string) {
+	t.Helper()
+	ch, err := conn.Channel()
+	if err != nil {
+		t.Fatalf("open topology channel: %v", err)
+	}
+	defer func() { _ = ch.Close() }()
+	if _, err := ch.QueueDeclare(name, true, false, false, false, amqp091.Table{"x-queue-type": "quorum"}); err != nil {
+		t.Fatalf("declare quorum fixture queue %q: %v", name, err)
+	}
+}
+
+func declareClassicQueue(t *testing.T, conn *amqp091.Connection, name string) {
+	t.Helper()
+	ch, err := conn.Channel()
+	if err != nil {
+		t.Fatalf("open topology channel: %v", err)
+	}
+	defer func() { _ = ch.Close() }()
+	if _, err := ch.QueueDeclare(name, true, false, false, false, amqp091.Table{"x-queue-type": "classic"}); err != nil {
+		t.Fatalf("declare classic fixture queue %q: %v", name, err)
+	}
+}
+
+func deleteQueue(t *testing.T, conn *amqp091.Connection, name string) {
+	t.Helper()
+	ch, err := conn.Channel()
+	if err != nil {
+		t.Fatalf("open topology channel: %v", err)
+	}
+	defer func() { _ = ch.Close() }()
+	if _, err := ch.QueueDelete(name, false, false, false); err != nil {
+		t.Fatalf("delete fixture queue %q: %v", name, err)
+	}
 }
 
 // TestNewIsBackwardCompatible verifies that the legacy New constructor
@@ -79,6 +122,9 @@ func TestNewWithDialOpensInitialConnection(t *testing.T) {
 	if _, err := amqp091.DialConfig(url, amqp091.Config{
 		Dial: amqp091.DefaultDial(2 * time.Second),
 	}); err != nil {
+		if os.Getenv("CI") != "" {
+			t.Fatalf("configured CI RabbitMQ unavailable: %v", err)
+		}
 		t.Skipf("test rabbit not reachable at %s: %v", url, err)
 	}
 
@@ -125,6 +171,121 @@ func TestNewWithDialRejectsNilDialFunc(t *testing.T) {
 	}
 }
 
+func TestConsumeDoesNotCreateMissingFixedQueue(t *testing.T) {
+	conn := dialOrSkip(t)
+	transport := New(conn)
+	defer func() { _ = transport.Close() }()
+
+	endpoint := uniqueEndpoint("missing-fixed-queue")
+	_, err := transport.Consume(rpc.ConsumerConfig{
+		Endpoint: endpoint,
+		Handler:  func(context.Context, rpc.Delivery) error { return nil },
+	})
+	if !errors.Is(err, ErrFixedQueueUnavailable) {
+		t.Fatalf("Consume error = %v, want ErrFixedQueueUnavailable", err)
+	}
+
+	ch, channelErr := conn.Channel()
+	if channelErr != nil {
+		t.Fatalf("open inspect channel: %v", channelErr)
+	}
+	defer func() { _ = ch.Close() }()
+	if _, inspectErr := ch.QueueInspect(endpoint); inspectErr == nil {
+		t.Fatalf("missing queue %q was created by Consume", endpoint)
+	}
+}
+
+// TestConsumePassiveCheckCannotDistinguishClassicQueue documents an AMQP
+// protocol limitation: passive queue.declare checks existence but RabbitMQ
+// ignores durable/auto-delete/arguments. The deployment management gate, not
+// the SDK, must reject this classic queue before the adapter is started.
+func TestConsumePassiveCheckCannotDistinguishClassicQueue(t *testing.T) {
+	conn := dialOrSkip(t)
+	transport := New(conn)
+	defer func() { _ = transport.Close() }()
+
+	endpoint := uniqueEndpoint("classic-fixed-queue")
+	declareClassicQueue(t, conn, endpoint)
+	defer deleteQueue(t, conn, endpoint)
+
+	sub, err := transport.Consume(rpc.ConsumerConfig{
+		Endpoint: endpoint,
+		Handler:  func(context.Context, rpc.Delivery) error { return nil },
+	})
+	if err != nil {
+		t.Fatalf("passive existence check rejected an existing classic queue: %v", err)
+	}
+	defer func() { _ = sub.Close() }()
+}
+
+func TestReconnectReportsFixedQueueBecomingUnavailable(t *testing.T) {
+	conn := dialOrSkip(t)
+	transport := New(conn)
+	defer func() { _ = transport.Close() }()
+
+	endpoint := uniqueEndpoint("queue-unavailable")
+	declareQuorumQueue(t, conn, endpoint)
+	sub, err := transport.Consume(rpc.ConsumerConfig{
+		Endpoint: endpoint,
+		Handler:  func(context.Context, rpc.Delivery) error { return nil },
+	})
+	if err != nil {
+		t.Fatalf("Consume: %v", err)
+	}
+	defer func() { _ = sub.Close() }()
+
+	// Stop the active consumer, then remove the deployment-owned queue before
+	// the reconnect loop's first one-second retry.
+	concrete := sub.(*subscription)
+	if err := concrete.currentChannel().Close(); err != nil {
+		t.Fatalf("close consumer channel: %v", err)
+	}
+	deleteQueue(t, conn, endpoint)
+
+	source := sub.(rpc.TerminalErrorSubscription)
+	select {
+	case terminalErr := <-source.TerminalErrors():
+		if !errors.Is(terminalErr, ErrFixedQueueUnavailable) {
+			t.Fatalf("terminal error = %v, want ErrFixedQueueUnavailable", terminalErr)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("reconnect did not report unavailable fixed queue")
+	}
+}
+
+func TestPublishCanOwnConnectionReconnectWithoutDeadlock(t *testing.T) {
+	url := testBrokerURL()
+	conn := dialOrSkip(t)
+	transport := New(conn)
+	defer func() { _ = transport.Close() }()
+
+	// Install a dial function without starting the watchdog. This forces the
+	// immediately following Publish to own the reconnect path deterministically.
+	transport.connMu.Lock()
+	transport.dialFn = func() (*amqp091.Connection, error) { return amqp091.Dial(url) }
+	transport.connMu.Unlock()
+	if err := conn.Close(); err != nil {
+		t.Fatalf("close initial connection: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- transport.Publish(context.Background(), rpc.Request{
+			Endpoint: uniqueEndpoint("publish-after-close"),
+			Body:     []byte("probe"),
+		})
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Publish after connection close: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Publish deadlocked while reconnecting a dropped connection")
+	}
+}
+
 // TestConsumerRecoversChannelClose validates the v0.2.0 channel-level
 // recovery still works: closing the consumer's channel directly should
 // not strand the subscription — it must rebind and resume processing.
@@ -134,6 +295,7 @@ func TestConsumerRecoversChannelClose(t *testing.T) {
 	defer func() { _ = transport.Close() }()
 
 	endpoint := uniqueEndpoint("channel-recover")
+	declareQuorumQueue(t, conn, endpoint)
 	var received int32
 	delivered := make(chan struct{}, 4)
 
@@ -203,6 +365,9 @@ func TestConsumerRecoversConnectionClose(t *testing.T) {
 	if _, err := amqp091.DialConfig(url, amqp091.Config{
 		Dial: amqp091.DefaultDial(2 * time.Second),
 	}); err != nil {
+		if os.Getenv("CI") != "" {
+			t.Fatalf("configured CI RabbitMQ unavailable: %v", err)
+		}
 		t.Skipf("test rabbit not reachable at %s: %v", url, err)
 	}
 
@@ -219,6 +384,7 @@ func TestConsumerRecoversConnectionClose(t *testing.T) {
 	defer func() { _ = transport.Close() }()
 
 	endpoint := uniqueEndpoint("conn-recover")
+	declareQuorumQueue(t, transport.Connection(), endpoint)
 	delivered := make(chan string, 4)
 	bound := make(chan struct{})
 	var originalSubscription *subscription
@@ -328,6 +494,9 @@ func TestSetDialFuncEnablesReconnect(t *testing.T) {
 		Dial: amqp091.DefaultDial(2 * time.Second),
 	})
 	if err != nil {
+		if os.Getenv("CI") != "" {
+			t.Fatalf("configured CI RabbitMQ unavailable: %v", err)
+		}
 		t.Skipf("test rabbit not reachable at %s: %v", url, err)
 	}
 
@@ -363,6 +532,9 @@ func TestCloseStopsWatchdog(t *testing.T) {
 	if _, err := amqp091.DialConfig(url, amqp091.Config{
 		Dial: amqp091.DefaultDial(2 * time.Second),
 	}); err != nil {
+		if os.Getenv("CI") != "" {
+			t.Fatalf("configured CI RabbitMQ unavailable: %v", err)
+		}
 		t.Skipf("test rabbit not reachable at %s: %v", url, err)
 	}
 
@@ -424,6 +596,9 @@ func TestReconnectIsConcurrencySafe(t *testing.T) {
 		Dial: amqp091.DefaultDial(2 * time.Second),
 	})
 	if err != nil {
+		if os.Getenv("CI") != "" {
+			t.Fatalf("configured CI RabbitMQ unavailable: %v", err)
+		}
 		t.Skipf("test rabbit not reachable at %s: %v", url, err)
 	}
 

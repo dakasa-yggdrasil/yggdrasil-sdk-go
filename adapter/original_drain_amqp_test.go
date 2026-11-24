@@ -21,6 +21,7 @@ type originalAckTransport struct {
 	ackRelease <-chan struct{}
 	ackResult  chan error
 	calls      atomic.Int32
+	terminal   chan error
 }
 
 func (t *originalAckTransport) Consume(cfg rpc.ConsumerConfig) (rpc.Subscription, error) {
@@ -37,10 +38,34 @@ func (t *originalAckTransport) Consume(cfg rpc.ConsumerConfig) (rpc.Subscription
 		}
 		return handler(ctx, d)
 	}
-	return t.Transport.Consume(cfg) // Original built-in StopAdmission/Close handle.
+	sub, err := t.Transport.Consume(cfg)
+	if err != nil || t.terminal == nil {
+		return sub, err
+	}
+	return &originalTerminalAckSub{Subscription: sub, terminal: t.terminal}, nil
+
+}
+
+type originalTerminalAckSub struct {
+	rpc.Subscription
+	terminal <-chan error
+}
+
+func (s *originalTerminalAckSub) TerminalErrors() <-chan error { return s.terminal }
+func (s *originalTerminalAckSub) StopAdmission() {
+	s.Subscription.(interface{ StopAdmission() }).StopAdmission()
+}
+func (s *originalTerminalAckSub) CloseContext(ctx context.Context) error {
+	return s.Subscription.(interface{ CloseContext(context.Context) error }).CloseContext(ctx)
 }
 
 func TestOriginalAMQPDrainOverrunWaitsForOriginalAckAndConnection(t *testing.T) {
+	testOriginalAMQPDrain(t, nil)
+}
+func TestTerminalRunFailurePreservesOriginalAckOwnerAndFinalError(t *testing.T) {
+	testOriginalAMQPDrain(t, errors.New("original fixed queue unavailable"))
+}
+func testOriginalAMQPDrain(t *testing.T, terminalCause error) {
 	url := os.Getenv("YGGDRASIL_TEST_AMQP_URL")
 	if url == "" {
 		t.Skip("requires configured isolated CI RabbitMQ")
@@ -61,11 +86,17 @@ func TestOriginalAMQPDrainOverrunWaitsForOriginalAckAndConnection(t *testing.T) 
 	}
 	defer func() { _ = admin.Close() }()
 	queue := "original-drain-" + uuid.NewString()
+	if _, err := admin.QueueDeclare(queue, true, false, false, false, amqp091.Table{"x-queue-type": "quorum"}); err != nil {
+		t.Fatal(err)
+	}
 	defer func() { _, _ = admin.QueueDelete(queue, false, false, false) }()
 	release := make(chan struct{})
 	var once sync.Once
 	defer once.Do(func() { close(release) })
 	tr := &originalAckTransport{Transport: inner, ackStarted: make(chan struct{}), ackRelease: release, ackResult: make(chan error, 1)}
+	if terminalCause != nil {
+		tr.terminal = make(chan error, 1)
+	}
 	a := New(Config{DefaultTimeout: 250 * time.Millisecond}).Transport(tr).Register(queue, func(context.Context, rpc.Delivery) ([]byte, string, error) {
 		return []byte("original broker reply"), "text/plain", nil
 	})
@@ -104,8 +135,12 @@ func TestOriginalAMQPDrainOverrunWaitsForOriginalAckAndConnection(t *testing.T) 
 	if err := originalDrainResult(t, replyDone); err != nil {
 		t.Fatal(err)
 	}
-	cancel()
-	if err := originalDrainResult(t, runDone); !errors.Is(err, context.DeadlineExceeded) {
+	if terminalCause == nil {
+		cancel()
+	} else {
+		tr.terminal <- terminalCause
+	}
+	if err := originalDrainResult(t, runDone); !errors.Is(err, context.DeadlineExceeded) || (terminalCause != nil && !errors.Is(err, terminalCause)) {
 		t.Fatal(err)
 	}
 	if serverConn.IsClosed() {
@@ -134,8 +169,9 @@ func TestOriginalAMQPDrainOverrunWaitsForOriginalAckAndConnection(t *testing.T) 
 		t.Fatalf("original Ack failed: %v", err)
 	}
 	for range 2 {
-		if err := originalDrainResult(t, joined); err != nil {
-			t.Fatal(err)
+		err := originalDrainResult(t, joined)
+		if (terminalCause == nil && err != nil) || (terminalCause != nil && (!errors.Is(err, terminalCause) || errors.Is(err, context.DeadlineExceeded))) {
+			t.Fatalf("final original cause/settlement changed: %v", err)
 		}
 	}
 	if !serverConn.IsClosed() || tr.calls.Load() != 1 {

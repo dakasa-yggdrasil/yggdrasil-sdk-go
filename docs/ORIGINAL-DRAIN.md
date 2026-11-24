@@ -65,3 +65,34 @@ a separate original endpoint and an external fixture goroutine remain active. Ra
 This Source candidate does not update existing SDK098 consumers, publish a
 tag or image, or change a live deployment. Consumers need a separately reviewed
 pin and runtime adoption before using this API.
+
+## Fixed queues and terminal consumer failure
+
+This candidate retains the public v0.9.1 fixed-queue contract from commit
+`462c2d4bde08100523448b1b43b34688fecfd709`. Fixed consumer queues are checked
+with `QueueDeclarePassive`, never created or changed by `Consume`. AMQP passive
+declaration proves existence, not quorum/classic type, durability or policy
+arguments; those remain the existing deployment owner's responsibility.
+Ephemeral RPC reply queues retain their original behavior.
+
+`rpc.TerminalErrorSubscription` is optional and does not change `Subscription`.
+The AMQP implementation reports one `ErrFixedQueueUnavailable` for permanent
+403/404/405/406 consumer failures. Transient connection recovery retains its
+backoff. `Adapter.Run` observes terminal failure, stops admission on every
+original subscription and performs its same original drain. A terminal cause
+remains in both the bounded `Run` error and the eventual original completion
+error. It never becomes proof that accepted provider work had no effects, safe
+retry, or successful drain. Watchers are joined as the original Run finishes.
+
+The v0.9.1 publish reconnect fix also remains: resolve/reconnect the connection
+before taking `pubMu`, since reconnect itself resets the publisher under that
+lock. The SDK6 handler/reply/Ack joins, exact original completion handle,
+callback-panic refusal and `amqp091-go v1.13.0` dependency are preserved.
+
+CI provisions isolated quorum/classic/missing/restricted-read queue fixtures,
+checks permanent versus transient failures and actual publish reconnect, and
+keeps an original RabbitMQ Ack held past the Run budget after a terminal error.
+The final wait must preserve that error after joining the same settlement.
+No consumer SDK pin, vendor tree, tag or runtime image is changed here. The
+future EFI pin must refresh its existing vendor tree as well as module files;
+a version chosen for v0.9.1 consumers must sort above v0.9.1 under Go MVS.

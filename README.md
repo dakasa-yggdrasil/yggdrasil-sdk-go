@@ -233,3 +233,7 @@ next rebuild. The `surface` manifest schema is additive
 
 Apache-2.0 — see [LICENSE](LICENSE).
 </content>
+
+The original-drain Source candidate also preserves the v0.9.1 predeclared
+fixed-queue, optional terminal-consumer error and publisher reconnect contracts.
+See [the original drain contract](docs/ORIGINAL-DRAIN.md#fixed-queues-and-terminal-consumer-failure).

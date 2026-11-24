@@ -58,6 +58,7 @@ func TestSubscriptionCloseDrainsOriginalReplyAckBeforeChannelClose(t *testing.T)
 	}
 	defer admin.Close()
 	queue := uniqueEndpoint("shutdown-drain")
+	declareQuorumQueue(t, client.Connection(), queue)
 	defer func() { _, _ = admin.QueueDelete(queue, false, false, false) }()
 	started, release := make(chan struct{}), make(chan struct{})
 	var once sync.Once
@@ -148,6 +149,7 @@ func TestTransportCloseContextDeadlineLeavesOriginalHandlerChannelOpen(t *testin
 	}
 	defer admin.Close()
 	queue := uniqueEndpoint("shutdown-deadline")
+	declareQuorumQueue(t, client.Connection(), queue)
 	defer func() { _, _ = admin.QueueDelete(queue, false, false, false) }()
 	started, release := make(chan struct{}), make(chan struct{})
 	var once sync.Once

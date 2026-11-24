@@ -22,12 +22,19 @@ jobs:
     env:
       GOWORK: 'off'
       YGGDRASIL_TEST_AMQP_URL: amqp://guest:guest@localhost:5672/
+      YGGDRASIL_TEST_AMQP_DENIED_URL: amqp://sdk-read-denied:isolated-ci-only@localhost:5672/
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
           cache: true
+      - name: Provision isolated denied-read broker fixture
+        env:
+          RABBIT_CONTAINER: ${{ job.services.rabbitmq.id }}
+        run: |
+          docker exec "$RABBIT_CONTAINER" rabbitmqctl add_user sdk-read-denied isolated-ci-only
+          docker exec "$RABBIT_CONTAINER" rabbitmqctl set_permissions -p / sdk-read-denied '.*' '.*' '^$'
       - name: Race-check SDK contracts with actual RabbitMQ
         run: go test -race -count=1 ./...
       - name: Vet

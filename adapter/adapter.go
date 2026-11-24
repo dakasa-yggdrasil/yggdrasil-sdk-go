@@ -214,7 +214,12 @@ func (a *Adapter) Run(ctx context.Context) (runErr error) {
 	a.mu.Unlock()
 
 	var subs []rpc.Subscription
+	runDone := make(chan struct{})
+	terminalErrors := make(chan error, len(handlers))
+	var terminalWatchers sync.WaitGroup
 	defer func() {
+		close(runDone)
+		terminalWatchers.Wait()
 		originalCause := runErr
 		a.mu.Lock()
 		afterRun = a.afterRun // Include cleanup installed by a partially failed startup.
@@ -293,9 +298,30 @@ func (a *Adapter) Run(ctx context.Context) (runErr error) {
 			return fmt.Errorf("adapter: consume %q: %w", capability, err)
 		}
 		subs = append(subs, sub)
+		if source, ok := sub.(rpc.TerminalErrorSubscription); ok {
+			terminalWatchers.Add(1)
+			go func(source rpc.TerminalErrorSubscription) {
+				defer terminalWatchers.Done()
+				select {
+				case err, open := <-source.TerminalErrors():
+					if !open || err == nil {
+						return
+					}
+					select {
+					case terminalErrors <- fmt.Errorf("subscription %q: %w", source.Endpoint(), err):
+					case <-runDone:
+					}
+				case <-runDone:
+				}
+			}(source)
+		}
 	}
-	<-ctx.Done()
-	return nil
+	select {
+	case <-ctx.Done():
+		return nil
+	case err := <-terminalErrors:
+		return fmt.Errorf("adapter: terminal consumer failure: %w", err)
+	}
 }
 
 // WithSignalHandler returns a context cancelled on SIGINT or SIGTERM.

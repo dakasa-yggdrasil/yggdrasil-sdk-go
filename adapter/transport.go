@@ -87,8 +87,8 @@ func (a *Adapter) ListenHTTP(addr string) *Adapter {
 // bare queue name nobody publishes to.
 func (a *Adapter) ListenAMQP(url string) *Adapter {
 	a.beforeRun = func(ctx context.Context) error {
-		// Initial dial: blocks with the full retry budget so the pod
-		// only reports Ready after rabbit is reachable.
+		// Initial dial blocks Run. Applications own their readiness endpoint;
+		// broker reachability alone does not prove active fixed-queue consumers.
 		conn, err := dialAMQPWithRetry(ctx, url)
 		if err != nil {
 			return err
