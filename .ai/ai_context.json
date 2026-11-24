@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "generated_at": "2026-11-24T17:56:52-03:00",
+  "generated_at": "2026-11-24T18:02:31-03:00",
   "primary_language": "go",
   "languages": {
     ".go": 59,
@@ -8,7 +8,7 @@
     ".yml": 2
   },
   "provenance": {
-    "commit": "d811b0bb782661e3c2a24f6d8e6ac04421cfaefc",
+    "commit": "6dc72fd71a6a7a690ebcc627691ca91c30cc8c30",
     "dirty": true,
     "files": [
       {
@@ -40,7 +40,7 @@
     {
       "path": "adapter",
       "files": 7,
-      "kb": 51
+      "kb": 52
     },
     {
       "path": "sdk/events",
@@ -60,7 +60,7 @@
     {
       "path": "rpc/amqp",
       "files": 4,
-      "kb": 62
+      "kb": 63
     },
     {
       "path": "mtls",

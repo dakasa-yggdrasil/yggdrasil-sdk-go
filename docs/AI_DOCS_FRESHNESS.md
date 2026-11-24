@@ -7,8 +7,8 @@ The docs-freshness CI reads it: a PR that bumps it is trusted and the AI is skip
 Before a PR: update stale docs, set verified_at_commit to your branch tip.
 On arrival: if this is behind the code you touch, reconcile the docs FIRST.
 
-verified_at_commit: d811b0bb782661e3c2a24f6d8e6ac04421cfaefc
-verified_diff_sha256: 4cfd52a6ed8fc8942699ce9269b51aad2d50f5fcfb6a07b1a0f10cb747c3ddb8
+verified_at_commit: 6dc72fd71a6a7a690ebcc627691ca91c30cc8c30
+verified_diff_sha256: 6f0f77bb22f6e3bb8f9081f046df90773f376ac9bb3ef9f6b624d412303b4f7d
 reconciler_schema: 1
 verified_at: 2026-11-24
 by: Codex
@@ -23,3 +23,5 @@ exact_drain_panic_boundary_review: Reviewed narrow original callback containment
 exact_drain_nilpanic_and_original_ack_review: Peer P2 closed by action-returned flag, preserving opaque UNQUALIFIED panic(nil) under both GODEBUG modes. Actual old reconnect fixture notified before Ack then intentionally closed its connection; require original Ack plus same-channel QoS broker barrier before notification. Strict payload assertions/production at-least-once behavior unchanged. Both original failures and intermediate cohorts retained; no local tests/builds/runtime actions.
 
 fixed_queue_v091_forwardport_source_review: Preserve predeclared queues, permanent terminal errors and publish reconnect lock ordering on SDK6. All original drain/reply/Ack/unknown contracts and amqp1.13 remain. Configured CI-only quorum/classic/missing/restricted-user and original-Ack terminal regressions; no local tests, consumer pins, tags or Native effects.
+
+quorum_counter_source_review: Official RabbitMQ3.13.7 cancelled records retain checked_out originals and query_stat counts those entries. Preserve original classic assertions; added quorum original-settlement and pending-message proofs, without runtime changes. All executable validation is GitHub CI.

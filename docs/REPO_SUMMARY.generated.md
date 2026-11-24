@@ -1,6 +1,6 @@
 # Repo Summary (generated)
 
-_Generated from HEAD at: 2026-11-24T17:56:52-03:00_
+_Generated from HEAD at: 2026-11-24T18:02:31-03:00_
 
 ## Languages
 
@@ -22,11 +22,11 @@ _Generated from HEAD at: 2026-11-24T17:56:52-03:00_
 
 - sdk/reconcile: 14 files (96.5 KB)
 - surface: 12 files (32.2 KB)
-- adapter: 7 files (51.9 KB)
+- adapter: 7 files (52.9 KB)
 - sdk/events: 5 files (22.1 KB)
 - sig/hmac: 5 files (12.8 KB)
 - webhookhttp: 5 files (20.1 KB)
-- rpc/amqp: 4 files (63.0 KB)
+- rpc/amqp: 4 files (63.5 KB)
 - mtls: 3 files (9.0 KB)
 - rpc/http: 3 files (25.8 KB)
 - .github/workflows: 2 files (7.0 KB)
