@@ -71,9 +71,24 @@ type Transport interface {
 
 // Subscription represents one active consumer. Closing it stops new
 // deliveries and waits for any in-flight handler to finish.
+// Built-in subscriptions also implement optional StopAdmission(), which returns
+// after synchronously refusing new invocations without awaiting original work.
+// The public Subscription interface remains unchanged. Legacy custom Close()
+// implementations retain their own contract; callers cannot infer a separate
+// synchronous stop phase or stronger join proof than that implementation gives.
 type Subscription interface {
 	Endpoint() string
 	Close() error
+}
+
+// TerminalErrorSubscription is implemented by subscriptions that can become
+// permanently unusable after Consume has succeeded. TerminalErrors delivers at
+// most one non-nil error. Adapter.Run watches this optional contract so a
+// topology violation cannot leave a process alive without an active consumer.
+// Transient reconnect failures are not reported here.
+type TerminalErrorSubscription interface {
+	Subscription
+	TerminalErrors() <-chan error
 }
 
 // ConsumerConfig configures one Consume call.

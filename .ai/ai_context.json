@@ -1,0 +1,165 @@
+{
+  "schema_version": 2,
+  "generated_at": "2026-11-24T18:02:31-03:00",
+  "primary_language": "go",
+  "languages": {
+    ".go": 59,
+    ".yaml": 1,
+    ".yml": 2
+  },
+  "provenance": {
+    "commit": "6dc72fd71a6a7a690ebcc627691ca91c30cc8c30",
+    "dirty": true,
+    "files": [
+      {
+        "path": "CLAUDE.md",
+        "sha256": "833631f841eea0d4099afe238e71609956e812787c6d5bfdecbeb46208e68e8a"
+      },
+      {
+        "path": "README.md",
+        "sha256": "af3218ec8170c3ab0cdc5f39892f1a48800840f1fa766cbb4682de18bbdb8e77"
+      },
+      {
+        "path": "go.mod",
+        "sha256": "c3f47830ca3f6a7aa219b88ea2cc405f71803f9525d487427a8d4abb44f6096a"
+      }
+    ]
+  },
+  "service": {},
+  "top_dirs": [
+    {
+      "path": "sdk/reconcile",
+      "files": 14,
+      "kb": 96
+    },
+    {
+      "path": "surface",
+      "files": 12,
+      "kb": 32
+    },
+    {
+      "path": "adapter",
+      "files": 7,
+      "kb": 52
+    },
+    {
+      "path": "sdk/events",
+      "files": 5,
+      "kb": 22
+    },
+    {
+      "path": "sig/hmac",
+      "files": 5,
+      "kb": 12
+    },
+    {
+      "path": "webhookhttp",
+      "files": 5,
+      "kb": 20
+    },
+    {
+      "path": "rpc/amqp",
+      "files": 4,
+      "kb": 63
+    },
+    {
+      "path": "mtls",
+      "files": 3,
+      "kb": 8
+    },
+    {
+      "path": "rpc/http",
+      "files": 3,
+      "kb": 25
+    },
+    {
+      "path": ".github/workflows",
+      "files": 2,
+      "kb": 6
+    },
+    {
+      "path": "rpc",
+      "files": 1,
+      "kb": 8
+    },
+    {
+      "path": "surface/testdata",
+      "files": 1,
+      "kb": 0
+    }
+  ],
+  "top_files_by_size": [
+    {
+      "path": "rpc/amqp/amqp.go",
+      "kb": 28
+    },
+    {
+      "path": "rpc/amqp/amqp_reconnect_test.go",
+      "kb": 21
+    },
+    {
+      "path": "sdk/reconcile/register.go",
+      "kb": 19
+    },
+    {
+      "path": "rpc/http/http.go",
+      "kb": 13
+    },
+    {
+      "path": "sdk/reconcile/emit_test.go",
+      "kb": 12
+    },
+    {
+      "path": "adapter/adapter.go",
+      "kb": 12
+    },
+    {
+      "path": "adapter/original_drain_test.go",
+      "kb": 12
+    },
+    {
+      "path": "sdk/reconcile/destroy_resource_id_test.go",
+      "kb": 9
+    },
+    {
+      "path": "sdk/reconcile/destroy_with_desired_test.go",
+      "kb": 9
+    },
+    {
+      "path": "webhookhttp/server_test.go",
+      "kb": 8
+    },
+    {
+      "path": "surface/types.go",
+      "kb": 8
+    },
+    {
+      "path": "rpc/transport.go",
+      "kb": 8
+    }
+  ],
+  "contracts": {
+    "openapi": false,
+    "openapi_endpoints_estimated": 0,
+    "event_schemas": 0
+  },
+  "database": {
+    "migrations": 0
+  },
+  "docs": {
+    "glossary": false,
+    "readme": true
+  },
+  "dependencies": {
+    "go_modules": [
+      "github.com/google/uuid v1.6.0",
+      "github.com/rabbitmq/amqp091-go v1.13.0",
+      "golang.org/x/crypto v0.52.0",
+      "gopkg.in/yaml.v3 v3.0.1"
+    ]
+  },
+  "ops": {
+    "config_files": 2,
+    "k8s_manifests": 2
+  }
+}

@@ -81,6 +81,7 @@ type Adapter struct {
 	transport rpc.Transport
 	handlers  map[string]Handler
 	mu        sync.Mutex
+	drain     *originalDrain
 
 	// beforeRun is invoked by Run before Consume. Transport helpers
 	// (ListenHTTP, ListenAMQP) use it to start servers / dial
@@ -138,6 +139,54 @@ func (a *Adapter) Transport(t rpc.Transport) *Adapter {
 	return a
 }
 
+// ErrRunAlreadyStarted rejects concurrent or repeated Run without replacing
+// the original invocation's completion handle.
+var ErrRunAlreadyStarted = errors.New("adapter: Run already started")
+
+// ErrRunNotStarted is returned by WaitDrained before the first Run begins.
+var ErrRunNotStarted = errors.New("adapter: Run has not started")
+
+// A panic contains no publishable provider detail and proves no settlement.
+var errOriginalCleanupPanicked = errors.New("adapter: original cleanup callback panicked; completion unqualified")
+
+func callOriginalCleanup(phase string, action func() error) (err error) {
+	completed := false
+	defer func() {
+		if !completed {
+			_ = recover() // Never use a panic value, including compatibility panic(nil).
+			err = fmt.Errorf("%s: %w", phase, errOriginalCleanupPanicked)
+		}
+	}()
+	err = action()
+	completed = true
+	return err
+}
+
+type originalDrain struct {
+	done chan struct{}
+	err  error // Published once by close(done), read only after that same channel.
+}
+
+// Successful WaitDrained joins exact original Run cleanup, including
+// subscription settlement and afterRun. Any error leaves completion unqualified
+// and does not authorize process exit, successful drain or replay. Its context
+// bounds only this wait. A timeout does
+// not cancel the owner, start replacement work or qualify a successful drain.
+func (a *Adapter) WaitDrained(ctx context.Context) error {
+	a.mu.Lock()
+	drain := a.drain
+	a.mu.Unlock()
+	if drain == nil {
+		return ErrRunNotStarted
+	}
+	select {
+	case <-drain.done:
+		return drain.err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 // Run wires the registered handlers to the configured transport and
 // blocks until ctx is cancelled or SIGINT/SIGTERM arrives.
 //
@@ -145,68 +194,99 @@ func (a *Adapter) Transport(t rpc.Transport) *Adapter {
 // opt-in via the exported WithSignalHandler; Run alone does not
 // install SIGINT/SIGTERM traps, so callers can compose their own
 // cancellation.
+// A single Adapter accepts exactly one Run. Its original cleanup remains
+// available through WaitDrained after this call's unchanged wait budget expires.
 func (a *Adapter) Run(ctx context.Context) (runErr error) {
 	a.mu.Lock()
+	if a.drain != nil {
+		a.mu.Unlock()
+		return ErrRunAlreadyStarted
+	}
+	drain := &originalDrain{done: make(chan struct{})}
+	a.drain = drain // Created at the exact first Run entry, never replaced.
 	handlers := make(map[string]Handler, len(a.handlers))
 	for k, v := range a.handlers {
 		handlers[k] = v
 	}
 	beforeRun := a.beforeRun
+	afterRun := a.afterRun
+	transport := a.transport
 	a.mu.Unlock()
+
+	var subs []rpc.Subscription
+	runDone := make(chan struct{})
+	terminalErrors := make(chan error, len(handlers))
+	var terminalWatchers sync.WaitGroup
+	defer func() {
+		close(runDone)
+		terminalWatchers.Wait()
+		originalCause := runErr
+		a.mu.Lock()
+		afterRun = a.afterRun // Include cleanup installed by a partially failed startup.
+		a.mu.Unlock()
+		go func() {
+			// Built-ins stop local admission synchronously for EVERY endpoint before
+			// any join. Legacy custom subscriptions retain their existing concurrent
+			// Close contract; that interface cannot promise a synchronous stop phase.
+			finalErr := originalCause
+			for _, sub := range subs {
+				if stopper, ok := sub.(interface{ StopAdmission() }); ok {
+					err := callOriginalCleanup("stop-admission", func() error { stopper.StopAdmission(); return nil })
+					finalErr = errors.Join(finalErr, err)
+				}
+			}
+			results := make(chan error, len(subs))
+			for _, sub := range subs {
+				go func(s rpc.Subscription) {
+					results <- callOriginalCleanup("subscription-close", func() error {
+						if closer, ok := s.(interface{ CloseContext(context.Context) error }); ok {
+							return closer.CloseContext(context.Background())
+						}
+						return s.Close()
+					})
+				}(sub)
+			}
+			for range subs {
+				finalErr = errors.Join(finalErr, <-results)
+			}
+			// A callback panic is not proof of settlement. Keep global transport
+			// cleanup deferred under that unknown owner, never retry it.
+			if afterRun != nil && !errors.Is(finalErr, errOriginalCleanupPanicked) {
+				finalErr = errors.Join(finalErr, callOriginalCleanup("after-run", func() error { return afterRun(context.Background()) }))
+			}
+			drain.err = finalErr
+			close(drain.done)
+		}()
+		timeout := a.config.DefaultTimeout
+		if timeout <= 0 {
+			timeout = 30 * time.Second
+		}
+		budget, cancel := context.WithTimeout(context.Background(), timeout+time.Second)
+		defer cancel()
+		select {
+		case <-drain.done:
+			runErr = drain.err
+		case <-budget.Done():
+			runErr = errors.Join(originalCause, budget.Err())
+		}
+	}()
 
 	if len(handlers) == 0 {
 		return errors.New("adapter: no handlers registered — call Register before Run")
 	}
-
 	if beforeRun != nil {
 		if err := beforeRun(ctx); err != nil {
 			return err
 		}
 	}
-
 	a.mu.Lock()
-	transport := a.transport
-	afterRun := a.afterRun
+	transport, afterRun = a.transport, a.afterRun
 	a.mu.Unlock()
-
 	if transport == nil {
 		return errors.New("adapter: no transport configured — call ListenHTTP, ListenAMQP, or Transport before Run")
 	}
-	subs := make([]rpc.Subscription, 0, len(handlers))
-	defer func() {
-		// Shutdown is distinct from the cancelled admission/signal context.
-		// Existing handler deadlines remain intact; allow settlement to return.
-		timeout := a.config.DefaultTimeout
-		if timeout <= 0 {
-			timeout = 30 * time.Second
-		}
-		drainCtx, cancel := context.WithTimeout(context.Background(), timeout+time.Second)
-		defer cancel()
-		errs := make(chan error, len(subs))
-		for _, sub := range subs {
-			go func(s rpc.Subscription) {
-				if closer, ok := s.(interface{ CloseContext(context.Context) error }); ok {
-					errs <- closer.CloseContext(drainCtx)
-				} else {
-					errs <- s.Close()
-				}
-			}(sub)
-		}
-		for range subs {
-			select {
-			case err := <-errs:
-				runErr = errors.Join(runErr, err)
-			case <-drainCtx.Done():
-				runErr = errors.Join(runErr, drainCtx.Err())
-			}
-		}
-		if afterRun != nil {
-			runErr = errors.Join(runErr, afterRun(drainCtx))
-		}
-	}()
-
+	subs = make([]rpc.Subscription, 0, len(handlers))
 	for capability, handler := range handlers {
-		handler := handler
 		cfg := rpc.ConsumerConfig{
 			Endpoint:    capability,
 			Handler:     a.wrap(handler),
@@ -218,10 +298,30 @@ func (a *Adapter) Run(ctx context.Context) (runErr error) {
 			return fmt.Errorf("adapter: consume %q: %w", capability, err)
 		}
 		subs = append(subs, sub)
+		if source, ok := sub.(rpc.TerminalErrorSubscription); ok {
+			terminalWatchers.Add(1)
+			go func(source rpc.TerminalErrorSubscription) {
+				defer terminalWatchers.Done()
+				select {
+				case err, open := <-source.TerminalErrors():
+					if !open || err == nil {
+						return
+					}
+					select {
+					case terminalErrors <- fmt.Errorf("subscription %q: %w", source.Endpoint(), err):
+					case <-runDone:
+					}
+				case <-runDone:
+				}
+			}(source)
+		}
 	}
-
-	<-ctx.Done()
-	return nil
+	select {
+	case <-ctx.Done():
+		return nil
+	case err := <-terminalErrors:
+		return fmt.Errorf("adapter: terminal consumer failure: %w", err)
+	}
 }
 
 // WithSignalHandler returns a context cancelled on SIGINT or SIGTERM.

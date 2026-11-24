@@ -50,6 +50,12 @@ func waitNoConsumer(t *testing.T, ch *amqp091.Channel, queue string) {
 }
 
 func TestSubscriptionCloseDrainsOriginalReplyAckBeforeChannelClose(t *testing.T) {
+	testSubscriptionCloseDrainsOriginal(t, "classic")
+}
+func TestQuorumSubscriptionCloseKeepsOriginalAndUnadmittedDelivery(t *testing.T) {
+	testSubscriptionCloseDrainsOriginal(t, "quorum")
+}
+func testSubscriptionCloseDrainsOriginal(t *testing.T, queueType string) {
 	transport := New(shutdownBroker(t))
 	client := New(shutdownBroker(t))
 	admin, err := client.Connection().Channel()
@@ -58,6 +64,11 @@ func TestSubscriptionCloseDrainsOriginalReplyAckBeforeChannelClose(t *testing.T)
 	}
 	defer admin.Close()
 	queue := uniqueEndpoint("shutdown-drain")
+	if queueType == "classic" {
+		declareClassicQueue(t, client.Connection(), queue)
+	} else {
+		declareQuorumQueue(t, client.Connection(), queue)
+	}
 	defer func() { _, _ = admin.QueueDelete(queue, false, false, false) }()
 	started, release := make(chan struct{}), make(chan struct{})
 	var once sync.Once
@@ -96,7 +107,14 @@ func TestSubscriptionCloseDrainsOriginalReplyAckBeforeChannelClose(t *testing.T)
 	go func() { closed <- sub.Close() }()
 	shutdownWait(t, s.done)
 	go func() { closed <- sub.Close() }()
-	waitNoConsumer(t, admin, queue)
+	if queueType == "classic" {
+		waitNoConsumer(t, admin, queue)
+	} else {
+		q, err := admin.QueueInspect(queue)
+		if err != nil || q.Consumers != 1 {
+			t.Fatalf("quorum checked-out original record not retained: %+v %v", q, err)
+		}
+	}
 	if s.currentChannel().IsClosed() {
 		t.Fatal("channel closed under the original handler")
 	}
@@ -148,6 +166,7 @@ func TestTransportCloseContextDeadlineLeavesOriginalHandlerChannelOpen(t *testin
 	}
 	defer admin.Close()
 	queue := uniqueEndpoint("shutdown-deadline")
+	declareClassicQueue(t, client.Connection(), queue)
 	defer func() { _, _ = admin.QueueDelete(queue, false, false, false) }()
 	started, release := make(chan struct{}), make(chan struct{})
 	var once sync.Once
