@@ -1,23 +1,23 @@
 {
   "schema_version": 2,
-  "generated_at": "2026-11-24T16:33:57-03:00",
+  "generated_at": "2026-11-24T17:56:52-03:00",
   "primary_language": "go",
   "languages": {
-    ".go": 58,
+    ".go": 59,
     ".yaml": 1,
     ".yml": 2
   },
   "provenance": {
-    "commit": "e25868db912229c9ed1bb1a14aa16493ec0a3f8a",
+    "commit": "d811b0bb782661e3c2a24f6d8e6ac04421cfaefc",
     "dirty": true,
     "files": [
       {
         "path": "CLAUDE.md",
-        "sha256": "7f242ffdd1e51e26888b76d993c7e421d875913ef937ac41f2d2f0e3de82d36d"
+        "sha256": "833631f841eea0d4099afe238e71609956e812787c6d5bfdecbeb46208e68e8a"
       },
       {
         "path": "README.md",
-        "sha256": "62dbe03b6c1d971c045a9b84ac9d39e293baa4b1f0d6a8c52d8893eba2582597"
+        "sha256": "af3218ec8170c3ab0cdc5f39892f1a48800840f1fa766cbb4682de18bbdb8e77"
       },
       {
         "path": "go.mod",
@@ -40,7 +40,7 @@
     {
       "path": "adapter",
       "files": 7,
-      "kb": 49
+      "kb": 51
     },
     {
       "path": "sdk/events",
@@ -58,14 +58,14 @@
       "kb": 20
     },
     {
+      "path": "rpc/amqp",
+      "files": 4,
+      "kb": 62
+    },
+    {
       "path": "mtls",
       "files": 3,
       "kb": 8
-    },
-    {
-      "path": "rpc/amqp",
-      "files": 3,
-      "kb": 46
     },
     {
       "path": "rpc/http",
@@ -91,15 +91,15 @@
   "top_files_by_size": [
     {
       "path": "rpc/amqp/amqp.go",
-      "kb": 25
+      "kb": 28
+    },
+    {
+      "path": "rpc/amqp/amqp_reconnect_test.go",
+      "kb": 21
     },
     {
       "path": "sdk/reconcile/register.go",
       "kb": 19
-    },
-    {
-      "path": "rpc/amqp/amqp_reconnect_test.go",
-      "kb": 15
     },
     {
       "path": "rpc/http/http.go",
@@ -110,12 +110,12 @@
       "kb": 12
     },
     {
-      "path": "adapter/original_drain_test.go",
+      "path": "adapter/adapter.go",
       "kb": 12
     },
     {
-      "path": "adapter/adapter.go",
-      "kb": 11
+      "path": "adapter/original_drain_test.go",
+      "kb": 12
     },
     {
       "path": "sdk/reconcile/destroy_resource_id_test.go",
@@ -134,7 +134,7 @@
       "kb": 8
     },
     {
-      "path": "sdk/reconcile/dispatch_test.go",
+      "path": "rpc/transport.go",
       "kb": 8
     }
   ],

@@ -1,10 +1,10 @@
 # Repo Summary (generated)
 
-_Generated from HEAD at: 2026-11-24T16:33:57-03:00_
+_Generated from HEAD at: 2026-11-24T17:56:52-03:00_
 
 ## Languages
 
-- `.go`: 58 files
+- `.go`: 59 files
 - `.yaml`: 1 files
 - `.yml`: 2 files
 
@@ -22,31 +22,31 @@ _Generated from HEAD at: 2026-11-24T16:33:57-03:00_
 
 - sdk/reconcile: 14 files (96.5 KB)
 - surface: 12 files (32.2 KB)
-- adapter: 7 files (49.8 KB)
+- adapter: 7 files (51.9 KB)
 - sdk/events: 5 files (22.1 KB)
 - sig/hmac: 5 files (12.8 KB)
 - webhookhttp: 5 files (20.1 KB)
+- rpc/amqp: 4 files (63.0 KB)
 - mtls: 3 files (9.0 KB)
-- rpc/amqp: 3 files (46.9 KB)
 - rpc/http: 3 files (25.8 KB)
-- .github/workflows: 2 files (6.6 KB)
-- rpc: 1 files (8.0 KB)
+- .github/workflows: 2 files (7.0 KB)
+- rpc: 1 files (8.5 KB)
 - surface/testdata: 1 files (0.7 KB)
 
 ## Heaviest Files
 
-- rpc/amqp/amqp.go: 25.9 KB
+- rpc/amqp/amqp.go: 28.8 KB
+- rpc/amqp/amqp_reconnect_test.go: 21.2 KB
 - sdk/reconcile/register.go: 19.9 KB
-- rpc/amqp/amqp_reconnect_test.go: 15.6 KB
 - rpc/http/http.go: 13.6 KB
 - sdk/reconcile/emit_test.go: 12.4 KB
+- adapter/adapter.go: 12.4 KB
 - adapter/original_drain_test.go: 12.1 KB
-- adapter/adapter.go: 11.7 KB
 - sdk/reconcile/destroy_resource_id_test.go: 9.4 KB
 - sdk/reconcile/destroy_with_desired_test.go: 9.3 KB
 - webhookhttp/server_test.go: 8.8 KB
 - surface/types.go: 8.5 KB
-- sdk/reconcile/dispatch_test.go: 8.1 KB
+- rpc/transport.go: 8.5 KB
 
 ## Ops & Messaging
 
