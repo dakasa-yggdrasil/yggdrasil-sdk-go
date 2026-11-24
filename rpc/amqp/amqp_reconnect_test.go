@@ -220,12 +220,25 @@ func TestConsumerRecoversConnectionClose(t *testing.T) {
 
 	endpoint := uniqueEndpoint("conn-recover")
 	delivered := make(chan string, 4)
+	bound := make(chan struct{})
+	var originalSubscription *subscription
 
 	sub, err := transport.Consume(rpc.ConsumerConfig{
 		Endpoint: endpoint,
 		Handler: func(ctx context.Context, d rpc.Delivery) error {
+			<-bound
+			if err := d.Ack(); err != nil {
+				return err
+			}
+			// Ack is a one-way frame. A same-channel synchronous RPC proves
+			// the broker processed that Ack before this fixture deliberately
+			// closes the connection; notification-before-Ack allowed legitimate
+			// pre-restart redelivery to race the post-restart assertion.
+			if err := originalSubscription.currentChannel().Qos(1, 0, false); err != nil {
+				return err
+			}
 			delivered <- string(d.Body)
-			return d.Ack()
+			return nil
 		},
 		Timeout:     5 * time.Second,
 		Concurrency: 1,
@@ -233,6 +246,8 @@ func TestConsumerRecoversConnectionClose(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Consume: %v", err)
 	}
+	originalSubscription = sub.(*subscription)
+	close(bound)
 	defer func() { _ = sub.Close() }()
 
 	publish := func(body string) error {
