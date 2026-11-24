@@ -2,6 +2,7 @@ package adapter
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -316,8 +317,12 @@ func TestOriginalHTTPDrainOverrunJoinsAllRepliesAndAfterRun(t *testing.T) {
 				body, readErr := io.ReadAll(response.Body)
 				_ = response.Body.Close()
 				err = readErr
-				if response.StatusCode != http.StatusOK || !strings.Contains(string(body), name+"-original") {
-					err = errors.New("original HTTP response lost")
+				var envelope rpc.Envelope
+				if err == nil {
+					err = json.Unmarshal(body, &envelope)
+				}
+				if err == nil && (response.StatusCode != http.StatusOK || string(envelope.Body) != name+"-original" || envelope.ContentType != "text/plain") {
+					err = errors.New("original HTTP RPC envelope or response differs")
 				}
 			}
 			requestResults <- err
