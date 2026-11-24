@@ -28,7 +28,8 @@ surface contract, and the **reconcile + auto-emission** machinery that satisfies
 the [Integration Contract](https://github.com/dakasa-yggdrasil/yggdrasil-core)
 §6.5 Golden Rule on the adapter's behalf.
 
-It ships **no binary** — no Dockerfile, no CI workflow. Releases are git tags
+It ships **no binary** and no Dockerfile. SDK tests, the race detector and vet run
+in GitHub Actions against an isolated RabbitMQ service. Releases are git tags
 (`v0.8.5` today); consumers pin via `go.mod`.
 
 > Part of **Yggdrasil** — the self-hosted control plane for declarative

@@ -72,8 +72,9 @@ type Transport struct {
 	subsMu sync.Mutex
 	subs   []*subscription
 
-	closed   bool
-	closeMu  sync.Mutex
+	closed    bool
+	closeMu   sync.Mutex
+	closeDone chan struct{}
 }
 
 // New builds a Transport. Either Mux (for serving), BaseURL (for
@@ -94,6 +95,7 @@ func New(opts *Transport) *Transport {
 		BaseURL:    opts.BaseURL,
 		Client:     opts.Client,
 		PathPrefix: opts.PathPrefix,
+		closeDone:  make(chan struct{}),
 	}
 	if t.PathPrefix == "" {
 		t.PathPrefix = DefaultPathPrefix
@@ -125,12 +127,19 @@ func (t *Transport) Consume(cfg rpc.ConsumerConfig) (rpc.Subscription, error) {
 		cfg.Concurrency = 1
 	}
 
+	t.closeMu.Lock()
+	defer t.closeMu.Unlock()
+	if t.closed {
+		return nil, rpc.ErrClosed
+	}
 	sub := &subscription{
 		transport: t,
 		endpoint:  cfg.Endpoint,
 		sem:       make(chan struct{}, cfg.Concurrency),
 		timeout:   cfg.Timeout,
 		handler:   cfg.Handler,
+		done:      make(chan struct{}),
+		closeDone: make(chan struct{}),
 	}
 
 	path := t.PathPrefix + cfg.Endpoint
@@ -239,32 +248,44 @@ func (t *Transport) Publish(ctx context.Context, req rpc.Request) error {
 	return nil
 }
 
-// Close unregisters every subscription and releases the HTTP
-// client's idle connections. Safe to call multiple times.
-func (t *Transport) Close() error {
+// Close stops admission and waits for admitted handlers and response writes.
+func (t *Transport) Close() error { return t.CloseContext(context.Background()) }
+
+// CloseContext bounds the caller's wait, without cancelling running handlers.
+// An expired deadline is not a successful drain; the original wait continues.
+func (t *Transport) CloseContext(ctx context.Context) error {
 	t.closeMu.Lock()
-	if t.closed {
-		t.closeMu.Unlock()
-		return nil
+	if t.closeDone == nil {
+		t.closeDone = make(chan struct{})
 	}
-	t.closed = true
+	if !t.closed {
+		t.closed = true
+		t.subsMu.Lock()
+		subs := append([]*subscription(nil), t.subs...)
+		t.subs = nil
+		t.subsMu.Unlock()
+		go func() {
+			var wg sync.WaitGroup
+			for _, sub := range subs {
+				wg.Add(1)
+				go func(s *subscription) { defer wg.Done(); _ = s.Close() }(sub)
+			}
+			wg.Wait()
+			if t.Client != nil && t.Client.Transport != nil {
+				if closer, ok := t.Client.Transport.(interface{ CloseIdleConnections() }); ok {
+					closer.CloseIdleConnections()
+				}
+			}
+			close(t.closeDone)
+		}()
+	}
 	t.closeMu.Unlock()
-
-	t.subsMu.Lock()
-	subs := append([]*subscription(nil), t.subs...)
-	t.subs = nil
-	t.subsMu.Unlock()
-
-	for _, sub := range subs {
-		_ = sub.Close()
+	select {
+	case <-t.closeDone:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
-
-	if t.Client != nil && t.Client.Transport != nil {
-		if closer, ok := t.Client.Transport.(interface{ CloseIdleConnections() }); ok {
-			closer.CloseIdleConnections()
-		}
-	}
-	return nil
 }
 
 // subscription is one registered POST handler.
@@ -275,19 +296,33 @@ type subscription struct {
 	timeout   time.Duration
 	handler   rpc.Handler
 
-	closedMu sync.RWMutex
-	closed   bool
+	closedMu  sync.RWMutex
+	closed    bool
+	done      chan struct{}
+	closeDone chan struct{}
+	handlers  sync.WaitGroup
 }
 
 func (s *subscription) Endpoint() string { return s.endpoint }
 
-func (s *subscription) Close() error {
+func (s *subscription) Close() error { return s.CloseContext(context.Background()) }
+
+// CloseContext leaves admitted request contexts intact and stops waiting
+// requests from becoming new handler invocations after admission closes.
+func (s *subscription) CloseContext(ctx context.Context) error {
 	s.closedMu.Lock()
-	s.closed = true
+	if !s.closed {
+		s.closed = true
+		close(s.done)
+		go func() { s.handlers.Wait(); close(s.closeDone) }()
+	}
 	s.closedMu.Unlock()
-	// http.ServeMux cannot unregister handlers; the handler checks
-	// s.closed on each invocation and returns 503 when stopped.
-	return nil
+	select {
+	case <-s.closeDone:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // serveHTTP decodes the inbound envelope, invokes the handler, and
@@ -307,10 +342,23 @@ func (s *subscription) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	select {
 	case s.sem <- struct{}{}:
 		defer func() { <-s.sem }()
+	case <-s.done:
+		http.Error(w, "subscription closed", http.StatusServiceUnavailable)
+		return
 	case <-r.Context().Done():
 		http.Error(w, "request canceled", http.StatusServiceUnavailable)
 		return
 	}
+
+	s.closedMu.Lock()
+	if s.closed {
+		s.closedMu.Unlock()
+		http.Error(w, "subscription closed", http.StatusServiceUnavailable)
+		return
+	}
+	s.handlers.Add(1)
+	s.closedMu.Unlock()
+	defer s.handlers.Done()
 
 	raw, err := io.ReadAll(r.Body)
 	if err != nil {

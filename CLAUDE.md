@@ -11,8 +11,9 @@ Repo: `github.com/dakasa-yggdrasil/yggdrasil-sdk-go` (open source).
 Consumed by **every** `dakasa-yggdrasil/integration-*` adapter (~14 today),
 plus a handful of internal DaKasa adapters.
 
-This repo ships **no binary** — it's a library. No Dockerfile, no CI
-workflows. Releases are git tags; consumers pin via `go.mod`.
+This repo ships **no binary** — it's a library. No Dockerfile. GitHub Actions
+runs race tests and vet against an isolated RabbitMQ service. Releases are git
+tags; consumers pin via `go.mod`.
 
 ## Stack
 
@@ -176,13 +177,9 @@ b115c21 🐛 fix(rpc/http): take *Transport in New to stop sync.Mutex copy
 
 ## Validation
 
-```bash
-go test ./...
-go vet ./...
-```
-
-No CI configured (yet). Validation runs locally + on consumer-repo CI
-when adapters bump.
+Executable checks run in the `SDK Go tests` GitHub Actions workflow. On the
+owner's machine, use only static formatting/diff checks; never run local tests
+or builds. Inspect CI for the AMQP/HTTP concurrency and real broker results.
 
 ## Mandatory contracts
 

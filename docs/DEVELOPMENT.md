@@ -1,8 +1,9 @@
 # Development — test, release, compatibility
 
-`yggdrasil-sdk-go` is a **library**: no binary, no Dockerfile, no CI workflow in
-this repo. Releases are git tags; consumers pin via `go.mod`. Validation runs
-locally and on consumer-repo CI when an adapter bumps the pin.
+`yggdrasil-sdk-go` is a **library**: no binary or Dockerfile. Releases are git
+tags; consumers pin via `go.mod`. The SDK Go tests workflow runs tests with the
+race detector and vet on pull requests and Main, including an actual isolated
+RabbitMQ service. No tests or builds run on the owner's local machine.
 
 Back to the [README](../README.md) · [USAGE](USAGE.md) · [PACKAGES](PACKAGES.md) ·
 [RECONCILE-AND-EVENTS](RECONCILE-AND-EVENTS.md).
@@ -22,26 +23,38 @@ Back to the [README](../README.md) · [USAGE](USAGE.md) · [PACKAGES](PACKAGES.m
 
 ---
 
-## Build, test, vet
+## CI validation
 
-```sh
-go test ./...
-go vet  ./...
-```
+The `SDK Go tests` workflow runs `go test -race -count=1 ./...` and `go vet ./...`
+with `GOWORK=off`. Its RabbitMQ service supplies `YGGDRASIL_TEST_AMQP_URL`; the
+new drain tests fail if that configured broker is unavailable. Local validation
+on the owner's machine is limited to static checks such as formatting and diffs.
+Inspect the pull request's GitHub Actions result for executable validation.
 
-> **If a `go.work` file is present in a parent directory**, the multi-module
-> workspace may reference sibling repos that aren't checked out, and bare
-> `go test ./...` fails to load the workspace. Run with the workspace disabled to
-> test this module standalone:
->
-> ```sh
-> GOWORK=off go test ./...
-> GOWORK=off go vet  ./...
-> ```
+## Planned shutdown
 
-All ten buildable packages have tests (`rpc` is the only one with no test files —
-it's pure type/contract definitions). The AMQP reconnect behavior is covered by
-`rpc/amqp/amqp_reconnect_test.go` without a live broker.
+The AMQP and HTTP subscriptions stop admitting handlers, wait for admitted work
+including Reply and Ack/Nack to return, then release transport resources. AMQP
+uses its own consumer tag for `basic.cancel`; deliveries not started before the
+cutoff remain unacknowledged until the channel closes. Reconnect also joins the
+old delivery loop before admitting work on its replacement channel. This does
+not prevent redelivery caused by an unexpected broker or process failure.
+
+Concrete transports/subscriptions additionally support `CloseContext(ctx)`;
+`rpc.Transport` and `rpc.Subscription` interfaces remain unchanged. The context
+bounds the caller's wait, not the active handler: expiry returns an error and
+the original drain continues without a forced channel close. `Close()` waits for
+actual drain. Adapter `Run` gives shutdown the existing DefaultTimeout plus one
+second for settlement, separately from its cancelled signal context, and
+returns drain/server shutdown failures instead of silently reporting success.
+
+Runtime termination grace must allow that budget. A handler that ignores its
+own deadline, a forced process kill, failed reply or failed settlement can still
+leave an unknown result. Preserve the original run/idempotency identity; this is
+not an exactly-once or no-effects guarantee. Merging this library change alone
+does not qualify any deployed adapter for autoscaling: consumers still need a
+reviewed pin, rebuilt image and actual drain receiving. No tags or runtime pins
+are changed by this patch.
 
 ---
 
