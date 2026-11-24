@@ -3,6 +3,7 @@ package adapter
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -11,6 +12,24 @@ import (
 
 	"github.com/dakasa-yggdrasil/yggdrasil-sdk-go/rpc"
 )
+
+func TestOriginalCleanupNilPanicNeverQualifiesSuccessfulReturn(t *testing.T) {
+	for _, compat := range []string{"0", "1"} {
+		t.Run("panicnil="+compat, func(t *testing.T) {
+			// Go dynamically observes GODEBUG changes. Keep all other configured
+			// debug settings and restore the environment through testing cleanup.
+			settings := os.Getenv("GODEBUG")
+			if settings != "" {
+				settings += ","
+			}
+			t.Setenv("GODEBUG", settings+"panicnil="+compat)
+			err := callOriginalCleanup("nil-panic-fixture", func() error { panic(nil) })
+			if !errors.Is(err, errOriginalCleanupPanicked) {
+				t.Fatalf("panic(nil) became success under compatibility=%s: %v", compat, err)
+			}
+		})
+	}
+}
 
 type panicDrainSubscription struct {
 	name                  string

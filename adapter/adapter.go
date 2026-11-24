@@ -150,12 +150,16 @@ var ErrRunNotStarted = errors.New("adapter: Run has not started")
 var errOriginalCleanupPanicked = errors.New("adapter: original cleanup callback panicked; completion unqualified")
 
 func callOriginalCleanup(phase string, action func() error) (err error) {
+	completed := false
 	defer func() {
-		if recover() != nil {
+		if !completed {
+			_ = recover() // Never use a panic value, including compatibility panic(nil).
 			err = fmt.Errorf("%s: %w", phase, errOriginalCleanupPanicked)
 		}
 	}()
-	return action()
+	err = action()
+	completed = true
+	return err
 }
 
 type originalDrain struct {
