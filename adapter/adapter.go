@@ -146,13 +146,27 @@ var ErrRunAlreadyStarted = errors.New("adapter: Run already started")
 // ErrRunNotStarted is returned by WaitDrained before the first Run begins.
 var ErrRunNotStarted = errors.New("adapter: Run has not started")
 
+// A panic contains no publishable provider detail and proves no settlement.
+var errOriginalCleanupPanicked = errors.New("adapter: original cleanup callback panicked; completion unqualified")
+
+func callOriginalCleanup(phase string, action func() error) (err error) {
+	defer func() {
+		if recover() != nil {
+			err = fmt.Errorf("%s: %w", phase, errOriginalCleanupPanicked)
+		}
+	}()
+	return action()
+}
+
 type originalDrain struct {
 	done chan struct{}
 	err  error // Published once by close(done), read only after that same channel.
 }
 
-// WaitDrained joins the exact original Run cleanup, including subscription
-// settlement and afterRun. Its context bounds only this wait. A timeout does
+// Successful WaitDrained joins exact original Run cleanup, including
+// subscription settlement and afterRun. Any error leaves completion unqualified
+// and does not authorize process exit, successful drain or replay. Its context
+// bounds only this wait. A timeout does
 // not cancel the owner, start replacement work or qualify a successful drain.
 func (a *Adapter) WaitDrained(ctx context.Context) error {
 	a.mu.Lock()
@@ -205,27 +219,31 @@ func (a *Adapter) Run(ctx context.Context) (runErr error) {
 			// Built-ins stop local admission synchronously for EVERY endpoint before
 			// any join. Legacy custom subscriptions retain their existing concurrent
 			// Close contract; that interface cannot promise a synchronous stop phase.
+			finalErr := originalCause
 			for _, sub := range subs {
 				if stopper, ok := sub.(interface{ StopAdmission() }); ok {
-					stopper.StopAdmission()
+					err := callOriginalCleanup("stop-admission", func() error { stopper.StopAdmission(); return nil })
+					finalErr = errors.Join(finalErr, err)
 				}
 			}
 			results := make(chan error, len(subs))
 			for _, sub := range subs {
 				go func(s rpc.Subscription) {
-					if closer, ok := s.(interface{ CloseContext(context.Context) error }); ok {
-						results <- closer.CloseContext(context.Background())
-					} else {
-						results <- s.Close()
-					}
+					results <- callOriginalCleanup("subscription-close", func() error {
+						if closer, ok := s.(interface{ CloseContext(context.Context) error }); ok {
+							return closer.CloseContext(context.Background())
+						}
+						return s.Close()
+					})
 				}(sub)
 			}
-			finalErr := originalCause
 			for range subs {
 				finalErr = errors.Join(finalErr, <-results)
 			}
-			if afterRun != nil {
-				finalErr = errors.Join(finalErr, afterRun(context.Background()))
+			// A callback panic is not proof of settlement. Keep global transport
+			// cleanup deferred under that unknown owner, never retry it.
+			if afterRun != nil && !errors.Is(finalErr, errOriginalCleanupPanicked) {
+				finalErr = errors.Join(finalErr, callOriginalCleanup("after-run", func() error { return afterRun(context.Background()) }))
 			}
 			drain.err = finalErr
 			close(drain.done)

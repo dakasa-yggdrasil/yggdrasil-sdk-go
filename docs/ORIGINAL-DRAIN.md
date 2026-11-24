@@ -34,18 +34,23 @@ unchanged. Legacy custom subscriptions still close concurrently and are joined
 according to their existing `Close` contract; that interface does not provide
 a separate synchronous admission phase or prove more than its implementation.
 
-A caller that needs eventual original completion after a `Run` error can wait
-again without replaying work:
+A caller that needs eventual original completion after a `Run` error can call
+`worker.WaitDrained(context.Background())` without replaying work. Only a nil
+result qualifies successful original cleanup. Any error leaves the result
+unqualified: applications that admitted work must retain their original
+process in their existing HOLD path, rather than exit because a failed cleanup
+callback returned. Kustomize and Helm retain their existing indefinite HOLD
+until a separately qualified consumer pin adopts this API.
 
-```go
-runErr := worker.Run(signalContext)
-if runErr != nil {
-    // Retain runErr in the caller's diagnostics; this is the same owner.
-    if finalErr := worker.WaitDrained(context.Background()); finalErr != nil {
-        return errors.Join(runErr, finalErr)
-    }
-}
-```
+Panics are contained only at original stop-admission, subscription-close and
+`afterRun` callback boundaries. The error identifies the fixed phase and says
+completion is unqualified; the panic value is never dumped or formatted.
+Other original endpoints still receive their stop and join calls. A stop/close
+panic defers global `afterRun` cleanup under that unknown settlement, so no
+transport is closed as though that failed callback had joined its resource.
+Nothing is retried. `afterRun`'s own panic likewise remains an unqualified
+error. An external goroutine is not joined merely because its callback
+panicked and returned to the containment boundary.
 
 Using an uncancelled context deliberately retains the original process for an
 unbounded, honestly incomplete operation. A caller may instead bound its wait,
@@ -54,8 +59,9 @@ exit, safe replay or absence of provider effects.
 
 CI tests use actual HTTP response/endpoint refusal and an isolated RabbitMQ
 service with the exact original Ack held across `Run` budget expiry. They also
-cover concurrent waiters, cancellation of one waiter, startup failure and
-`afterRun` held after handler completion. Race tests and vet run only in CI.
+cover concurrent waiters, cancellation of one waiter, startup failure,
+`afterRun` held after handler completion, and fixed callback-panic errors while
+a separate original endpoint and an external fixture goroutine remain active. Race tests and vet run only in CI.
 This Source candidate does not update existing SDK098 consumers, publish a
 tag or image, or change a live deployment. Consumers need a separately reviewed
 pin and runtime adoption before using this API.

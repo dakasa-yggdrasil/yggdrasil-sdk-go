@@ -224,3 +224,9 @@ no stronger admission or settlement promise inferred. The public Subscription
 interface and wire/queue/event contracts are unchanged. Green098 consumers and
 live desired manifests are not repinned by this Source PR. CI alone exercises
 actual HTTP/AMQP overruns and original cleanup; no local tests/builds.
+
+Original callback panics are contained with fixed opaque UNQUALIFIED errors;
+other endpoints still stop/join, while global afterRun is deferred if a panic
+left settlement unknown. A failed WaitDrained does not license application
+exit, retry or a claim that external work joined. Existing Kustomize/Helm HOLD
+policy stays in place until separate consumer qualification.
